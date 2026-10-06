@@ -121,15 +121,16 @@ zlib.dll
 
 ## 4. 已建成的工具（纯标准库，零依赖）
 
-> **注**：本节记录调查阶段的原型形态。代码后来重构为 `efd/` 包，
-> 模块划分见 [附录 C](#附录-c产出文件)。功能与结论未变。
+> **注**：本节记录调查阶段的原型形态。代码后来重构为 `efd/` 包
+> （`core/` `net/` `ui/` `cli/` 四层），模块划分见 [附录 C](#附录-c产出文件)。
+> 功能与结论未变。
 
 | 原型文件 | 作用 | 现在在哪 |
 |---|---|---|
-| `volreader.py` | **跨卷可寻址流**（~80 行）：把 54 个分卷伪装成一个 53 GiB 的 seekable 流，喂给标准库 `zipfile`。zip64 / 中央目录 / deflate / CRC32 全部由标准库负责 | `efd/volumes.py` |
-| `step2_http.py` | HTTP Range 版阅读器 + 字节计数器 | 并入 `efd/volumes.py`，实验本身成为 `efd probe` |
-| `plan.py` | 规划器（默认 dry-run），可选本地扫描做三分类 | `efd/planner.py` + `efd cli plan` |
-| `install.py` | 首次安装器，流式解包，**从不落盘压缩包** | `efd/installer.py` + `efd cli install` |
+| `volreader.py` | **跨卷可寻址流**（~80 行）：把 54 个分卷伪装成一个 53 GiB 的 seekable 流，喂给标准库 `zipfile`。zip64 / 中央目录 / deflate / CRC32 全部由标准库负责 | `efd/net/stream.py` |
+| `step2_http.py` | HTTP Range 版阅读器 + 字节计数器 | `efd/net/http.py`（+ `efd/net/volume.py` 的分卷协议），实验本身成为 `efd probe` |
+| `plan.py` | 规划器（默认 dry-run），可选本地扫描做三分类 | `efd/core/planner.py` + `efd cli plan` |
+| `install.py` | 首次安装器，流式解包，**从不落盘压缩包** | `efd/core/installer.py` + `efd cli install` |
 
 **设计要点**：不手写 zip64/中央目录/deflate/CRC32，只造一个 `RawIOBase`，其余交给标准库。
 
@@ -329,7 +330,7 @@ python -m efd install --target "D:\Apps\Hypergryph Launcher\games\Arknights Endf
 1. **立刻清 C 盘**：删掉 `C:\Users\libai\AppData\Local\Hypergryph\33a0a6296a20400d503c59ac0fd6341e\tmp\downloader\download\42131218\ArknightsEndfield_Downloader_*.exe`（166 MB）
 2. **打开鹰角启动器**，看它面对一个"半装"目录的反应 → 这是验证风险 #2 的最便宜方式
 3. 根据结果决定是「继续补 StreamingAssets」还是「换策略」
-4. ~~跑全量前给 `install.py` 补 `--resume` 与断点日志~~ → ✅ 已实现（判定逻辑在 `efd/planner.py`，CLI 与 GUI 共用）
+4. ~~跑全量前给 `install.py` 补 `--resume` 与断点日志~~ → ✅ 已实现（判定逻辑在 `efd/core/planner.py`，CLI 与 GUI 共用）
 
 ---
 
@@ -389,20 +390,35 @@ EFD(EFDownloader)/
 ├── run-gui.cmd              双击从源码启动 GUI
 ├── build.cmd                双击构建单文件 exe
 ├── efd/
-│   ├── config.py            常量与接口参数
-│   ├── util.py              格式化 / CRC32 / safe_join / 输出编码
-│   ├── detect.py            从注册表定位游戏目录
-│   ├── settings.py          记住上次用过的安装目录与网络选项
-│   ├── seed.py              Seed 接口客户端
-│   ├── throttle.py          限速（虚拟时间槽令牌桶）
-│   ├── volumes.py           跨卷可寻址流 + 顺序预读（核心）
-│   ├── archive.py           ZIP 归档视图
-│   ├── planner.py           差集与续传判定
-│   ├── installer.py         安装循环（流式）
-│   ├── cli.py               命令行
-│   └── gui.py               图形界面（Tkinter）
+│   ├── core/                与界面无关的一切
+│   │   ├── config.py            常量与接口参数
+│   │   ├── util.py              格式化 / CRC32 / safe_join / 输出编码
+│   │   ├── detect.py            从注册表定位游戏目录
+│   │   ├── settings.py          记住上次用过的安装目录与网络选项
+│   │   ├── seed.py              Seed 接口客户端
+│   │   ├── throttle.py          限速（虚拟时间槽令牌桶）
+│   │   ├── archive.py           ZIP 归档视图
+│   │   ├── planner.py           差集与续传判定
+│   │   └── installer.py         安装循环（流式）
+│   ├── net/                 传输层
+│   │   ├── volume.py            分卷协议（本地 / 缺失占位）
+│   │   ├── http.py              HTTP Range 分卷 + 取数重试
+│   │   ├── stream.py            跨卷可寻址流（ConcatReader）
+│   │   └── prefetch.py          顺序预读线程池
+│   ├── ui/                  Tkinter 界面
+│   │   ├── app.py / panels.py   窗口与面板
+│   │   ├── handlers.py          回调（按钮、进度、收尾）
+│   │   ├── messages.py          worker ↔ 界面的消息协议
+│   │   ├── theme.py             观感
+│   │   └── entry.py             进 GUI 的入口
+│   └── cli/                 命令行
+│       ├── parser.py            参数解析
+│       ├── commands.py          plan / install / probe / gui
+│       ├── report.py            人读与 --json 两种输出
+│       ├── runner.py            子命令分发与异常→退出码
+│       └── exitcode.py          退出码常量
 ├── packaging/               PyInstaller 入口、spec、图标
-├── tests/                   208 个用例，标准库 unittest
+├── tests/                   437 个用例，标准库 unittest
 ├── data/
 │   ├── package_manifest.csv 1692 条清单（派生物）
 │   ├── hotfix_index_main.json / hotfix_index_initial.json
@@ -422,8 +438,8 @@ EFD(EFDownloader)/
 
 | 形态 | 产物 | 目标机要求 |
 |---|---|---|
-| 单文件 exe | `dist/EFD.exe`（13.2 MiB） | **无需 Python**，双击即用 |
-| wheel | `efd-0.1.0-py3-none-any.whl`（33 KB） | Python 3.10+，`pip install efd` |
+| 单文件 exe | `dist/EFD.exe`（13.6 MiB） | **无需 Python**，双击即用 |
+| wheel | `efd-<版本>-py3-none-any.whl`（33 KB） | Python 3.10+，`pip install efd` |
 | 源码 | 本仓库 | Python 3.10+，`python -m efd gui` |
 
 exe 是**一个文件同时承载 CLI 与 GUI**：双击（无参数）进图形界面，

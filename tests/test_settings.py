@@ -28,21 +28,44 @@ class SettingsCase(unittest.TestCase):
 
 
 class TestReadWrite(SettingsCase):
-    def test_missing_file_reads_empty(self):
-        self.assertEqual(settings.load(), {})
+    def test_missing_file_reads_defaults(self):
+        self.assertEqual(settings.load(), settings.Settings())
         self.assertEqual(settings.remembered_target(), "")
 
-    def test_corrupt_file_reads_empty(self):
+    def test_corrupt_file_reads_defaults(self):
         """坏掉的设置文件不能让界面起不来。"""
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text("{ 这不是 json", encoding="utf-8")
-        self.assertEqual(settings.load(), {})
+        self.assertEqual(settings.load(), settings.Settings())
         self.assertEqual(settings.remembered_target(), "")
 
-    def test_non_dict_json_reads_empty(self):
+    def test_non_dict_json_reads_defaults(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text("[1, 2, 3]", encoding="utf-8")
-        self.assertEqual(settings.load(), {})
+        self.assertEqual(settings.load(), settings.Settings())
+
+    def test_null_json_reads_defaults(self):
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.write_text("null", encoding="utf-8")
+        self.assertEqual(settings.load(), settings.Settings())
+
+    def test_missing_keys_keep_other_keys_intact(self):
+        """缺一个键不影响另外两个——每个字段各有自己的默认值。"""
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.write_text('{"target": "D:/game"}', encoding="utf-8")
+        loaded = settings.load()
+        self.assertEqual(loaded.target, "D:/game")
+        self.assertEqual(loaded.jobs, str(DEFAULT_JOBS))
+        self.assertEqual(loaded.rate, "0")
+
+    def test_unknown_keys_are_dropped_on_save(self):
+        """用户手改文件塞进来的杂键不该被我们一直带着走。"""
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.write_text('{"target": "D:/game", "nonsense": 1}', encoding="utf-8")
+        settings.remember_net("4", "0")
+        on_disk = json.loads(self.path.read_text(encoding="utf-8"))
+        self.assertEqual(set(on_disk), {"target", "jobs", "rate"})
+        self.assertEqual(on_disk["target"], "D:/game", "改网络选项不该顺手抹掉目录")
 
     def test_roundtrip(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -69,11 +92,23 @@ class TestReadWrite(SettingsCase):
         self.path.write_text('{"target": 12345}', encoding="utf-8")
         self.assertEqual(settings.remembered_target(), "")
 
+    def test_no_write_when_nothing_changed(self):
+        """重复记同一个目录不该每次都写盘。
+
+        界面在每次点击时都会调 ``remember_*``；无变化的写入会让杀毒软件
+        反复扫这个文件，也让「文件修改时间」这个调试线索失去意义。
+        """
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        settings.remember_target("D:/same")
+        first = self.path.stat().st_mtime_ns
+        settings.remember_target("D:/same")
+        self.assertEqual(self.path.stat().st_mtime_ns, first)
+
     def test_unwritable_location_does_not_raise(self):
         """写不进去也必须静默——偏好设置不值得让程序崩。"""
         with mock.patch.object(settings, "config_path",
                                side_effect=OSError("boom")):
-            settings.save({"target": "x"})  # 不抛就算过
+            settings.save(settings.Settings(target="x"))  # 不抛就算过
 
 
 class TestPrecedence(SettingsCase):

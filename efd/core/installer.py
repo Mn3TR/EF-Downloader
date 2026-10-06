@@ -10,8 +10,8 @@ from __future__ import annotations
 
 import os
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Callable
 
 from .archive import Archive
 from .planner import Plan

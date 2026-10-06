@@ -144,7 +144,7 @@ class TestEntryPoints(unittest.TestCase):
     def test_gui_command_is_routed(self):
         """确认 gui 子命令被正确路由，而不是真的弹出一个窗口。
 
-        gui 模块在函数内部才 import，所以替换 efd.gui.main 就能拦住。
+        gui 模块在函数内部才 import，所以替换 efd.ui.entry.main 就能拦住。
         """
         from efd.ui import entry
         import efd.cli
@@ -156,7 +156,7 @@ class TestEntryPoints(unittest.TestCase):
             self.assertEqual(main(["gui"]), 0)
         finally:
             entry.main = original
-        self.assertEqual(calls, [1], "gui 子命令没有调用 efd.gui.main")
+        self.assertEqual(calls, [1], "gui 子命令没有调用 efd.ui.entry.main")
 
 
 class TestResolveTarget(unittest.TestCase):

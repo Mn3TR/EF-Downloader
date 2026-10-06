@@ -365,7 +365,7 @@ class TestFinishTellsTheTruth(unittest.TestCase):
         self.assertIn("没装", str(self.warn[0][1]), "没告诉用户还剩多少没装")
 
     def test_a_failed_run_does_not_paint_a_full_bar(self):
-        """进度条画到 100% 就是那句谎话的源头，用户 основном看的就是它。"""
+        """进度条画到 100% 就是那句谎话的源头，用户主要看的就是它。"""
         plan = self.plan
         self.app._finish(
             self.result(done=7, errors=["boom"]), plan, stopped=False,

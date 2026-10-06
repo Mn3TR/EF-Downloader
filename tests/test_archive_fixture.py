@@ -3,7 +3,7 @@
 夹具：``data/fixtures/vol054.bin``（最后一卷，6.7 MB，中央目录完整落在其中）
       ``data/fixtures/pack_sizes.json``（54 卷的真实尺寸，由 Seed 接口导出）
 
-只有末卷也能解析出完整清单——这正是 :class:`efd.volumes.MissingVolume`
+只有末卷也能解析出完整清单——这正是 :class:`efd.net.volume.MissingVolume`
 存在的原因：它不提供数据，但**提供正确的尺寸**，从而让所有偏移量成立。
 """
 

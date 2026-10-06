@@ -119,7 +119,7 @@ python tools/build_exe.py --setup       # 一次性：建构建 venv
 python tools/build_exe.py --clean --verify
 ```
 
-产物 **`dist/EFD.exe`，13.2 MiB**。三种用法共用同一个文件：
+产物 **`dist/EFD.exe`，13.6 MiB**。三种用法共用同一个文件：
 
 | 怎么用 | 结果 |
 |---|---|
@@ -152,7 +152,7 @@ onefile 每次启动都会先把自己解压到 `%TEMP%\`（约 13 MB），首�
 逻辑上等价于把 54 卷首尾相接得到的一个 53 GiB 单体 ZIP。
 
 标准库 `zipfile` 只接受一个 seekable 流，于是这里做了一个跨卷的 `RawIOBase`
-（[`efd/volumes.py`](efd/volumes.py) 的 `ConcatReader`），把 54 个 HTTP Range
+（[`efd/net/stream.py`](efd/net/stream.py) 的 `ConcatReader`），把 54 个 HTTP Range
 阅读器伪装成一个连续文件。
 
 ```mermaid
@@ -193,18 +193,34 @@ flowchart LR
 
 ```
 efd/
-├── config.py      常量与接口参数（改接口先看这里）
-├── util.py        格式化、CRC32、路径越界防护、输出编码
-├── detect.py      从注册表定位游戏目录（默认值不写死）
-├── settings.py    记住上次用过的安装目录与网络选项
-├── seed.py        Seed 接口客户端
-├── throttle.py    限速（虚拟时间槽）
-├── volumes.py     分卷 → 连续流 + 顺序预读（核心）
-├── archive.py     ZIP 归档视图
-├── planner.py     差集与续传判定（只用一份）
-├── installer.py   安装循环（只用一份）
-├── cli.py         命令行
-└── gui.py         图形界面（Tkinter）
+├── core/          与界面无关的一切
+│   ├── config.py      常量与接口参数（改接口先看这里）
+│   ├── util.py        格式化、CRC32、路径越界防护、输出编码
+│   ├── detect.py      从注册表定位游戏目录（默认值不写死）
+│   ├── settings.py    记住上次用过的安装目录与网络选项
+│   ├── seed.py        Seed 接口客户端
+│   ├── throttle.py    限速（虚拟时间槽）
+│   ├── archive.py     ZIP 归档视图
+│   ├── planner.py     差集与续传判定（只用一份）
+│   └── installer.py   安装循环（只用一份）
+├── net/           传输层
+│   ├── volume.py      分卷协议（本地 / 缺失占位）
+│   ├── http.py        HTTP Range 分卷 + 取数重试（核心）
+│   ├── stream.py      分卷 → 连续流（ConcatReader）
+│   └── prefetch.py    顺序预读线程池
+├── ui/            Tkinter 界面
+│   ├── app.py         窗口搭建
+│   ├── panels.py      日志/计划/详情面板
+│   ├── handlers.py    回调（按钮、进度、收尾）
+│   ├── messages.py    worker ↔ 界面的消息协议
+│   ├── theme.py       观感
+│   └── entry.py       进 GUI 的入口（摘控制台、设 DPI）
+└── cli/           命令行
+    ├── parser.py      参数解析
+    ├── commands.py    plan / install / probe / gui
+    ├── report.py      人读与 --json 两种输出
+    ├── runner.py      子命令分发与异常→退出码
+    └── exitcode.py    退出码常量
 
 packaging/         PyInstaller 入口、spec、图标
 tools/             build_exe.py（构建 exe）、make_icon.py、export_manifest.py
@@ -214,7 +230,7 @@ build.cmd          双击构建 exe
 run-gui.cmd        双击从源码启动图形界面
 LICENSE            MIT
 
-tests/             标准库 unittest，208 个用例，大部分不需要网络
+tests/             标准库 unittest，437 个用例，大部分不需要网络
 data/              派生物与离线夹具
 docs/              调查报告与取证样本
 
@@ -222,8 +238,8 @@ build/ dist/       构建中间产物与 EFD.exe（已被 .gitignore 忽略）
 .venv-build/       构建用 venv，同样不入库
 ```
 
-**`planner.py` 和 `installer.py` 是 CLI 与 GUI 的唯一实现。** 两者都只负责
-「显示」与「转发」，不重复任何业务逻辑。
+**`core/planner.py` 和 `core/installer.py` 是 CLI 与 GUI 的唯一实现。**
+`cli/` 与 `ui/` 都只负责「显示」与「转发」，不重复任何业务逻辑。
 
 ---
 
@@ -249,7 +265,7 @@ python tools/export_manifest.py             # 重建清单 CSV
 ## 已知限制与风险
 
 - **接口不是公开 API。** Seed 地址与 appcode 都是从启动器自身流量里取的，
-  服务端随时可能改。改动时先看 [`efd/config.py`](efd/config.py)。
+  服务端随时可能改。改动时先看 [`efd/core/config.py`](efd/core/config.py)。
 - **增量更新还没实现 —— 游戏版本更新后只能全量重装。** 目前只实现了通道 A
   （启动器全量客户端包）：它是一个 53 GiB 的整包，**没有「只下变了的部分」这个选项**。
   通道 A 的 URL 里带版本号，所以取到新包就是新版本、不会装错，但代价是重新下 53 GiB。
@@ -311,11 +327,11 @@ python -m efd plan --target . --limit 5     # 快速干跑
 
 1. **零运行时依赖。** 只用标准库。测试也用 `unittest`，不用 pytest。
 2. **默认不写盘。** `plan` 永不写盘；`install` 不加 `--apply` 只预览。
-3. **续传判定只有一处**（`planner._looks_installed`），CLI 与 GUI 共用。
+3. **续传判定只有一处**（`core/planner._looks_installed`），CLI 与 GUI 共用。
 4. **安装是流式的。** 不要退化成 `zf.read()` —— 最大单文件 1.50 GB，
    那会让内存峰值等于文件大小。
-5. **路径校验是显式拒绝，不是静默改写**（`util.safe_join`）。
-6. **管道输出统一 UTF-8**（`util.setup_output_encoding`）。
+5. **路径校验是显式拒绝，不是静默改写**（`core/util.safe_join`）。
+6. **管道输出统一 UTF-8**（`core/util.setup_output_encoding`）。
    控制台跟随控制台代码页；管道/重定向写 UTF-8。
    不这么做的话，PowerShell 7 / CI 读到的会是 cp936 字节，整段变成 `U+FFFD`。
    这个坑咬过两次（CLI 一次、构建脚本一次），所以提成了共用函数。

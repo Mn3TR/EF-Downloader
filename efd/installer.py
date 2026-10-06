@@ -204,7 +204,7 @@ def _quiet_remove(path: str) -> None:
         pass
 
 
-def _sweep_parts(target: str, plan: Plan) -> int:
+def _sweep_parts(target: str, plan: Plan) -> None:
     """清掉上次被强杀留下的 ``.part``。
 
     关窗口时 worker 是 daemon 线程，进程会立刻退出，正在写的那个文件就留在
@@ -213,7 +213,6 @@ def _sweep_parts(target: str, plan: Plan) -> int:
 
     只碰「清单里那条路径 + ``.part``」，不会误删别的东西。
     """
-    removed = 0
     for entry in list(plan.already) + list(plan.need):
         try:
             tmp = safe_join(target, entry.name) + ".part"
@@ -221,10 +220,8 @@ def _sweep_parts(target: str, plan: Plan) -> int:
             continue
         try:
             os.remove(tmp)
-            removed += 1
         except OSError:
             pass
-    return removed
 
 
 def _prune(target: str, names: list[str]) -> int:

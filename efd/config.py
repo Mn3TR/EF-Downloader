@@ -51,6 +51,16 @@ EXCLUDE_STREAMING: tuple[str, ...] = (
     "Endfield_Data/StreamingAssets/",
 )
 
+# 通道 B（资源热更新）会往这些子树里**新增**文件，而新增的条目不在通道 A 的
+# 清单里。所以「本地存在但通道 A 清单里没有」在这一子树下**不等于多余** ——
+# 实测热更新相对 1.5.3 包新增 115 个文件、7.23 GiB，全部落在 VFS 下。
+#
+# 代价是 `--prune` 再也回收不了旧版本留下的 VFS 残留（实测 67 个文件、0.71 GiB）。
+# 这是刻意的取舍：**漏删 0.71 GiB，好过误删 7.23 GiB。**
+HOT_UPDATE_PATHS: tuple[str, ...] = (
+    "Endfield_Data/StreamingAssets/VFS/",
+)
+
 __all__ = [
     "SEED_URL",
     "GAME_APPCODE",
@@ -65,6 +75,7 @@ __all__ = [
     "VOLUME_SIZE",
     "EXCLUDE_ACE",
     "EXCLUDE_STREAMING",
+    "HOT_UPDATE_PATHS",
     "seed_payload",
 ]
 

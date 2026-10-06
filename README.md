@@ -72,7 +72,7 @@ python -m efd install --apply
 | `--exclude-streaming` | 跳过 StreamingAssets（占 96% 体积，用于试探安装） |
 | `--limit N` | 只处理前 N 个文件 |
 | `--json FILE` | 把**完整**计划写成 JSON |
-| `--prune` | 装完后删除清单里已不存在的本地多余文件 |
+| `--prune` | 装完后删除清单里已不存在的本地多余文件（**跳过 `StreamingAssets/VFS`**，那里是热更新的地盘） |
 | `--keep-going` | 单个文件失败时继续，而不是中断 |
 
 默认**不排除任何东西** —— 「安装游戏」的默认含义就是把归档里的东西都装上。
@@ -223,7 +223,10 @@ python tools/export_manifest.py             # 重建清单 CSV
   且在游戏启动时会被自动重装；解压它的文件并不等于完成安装。如果 C 盘紧张，
   这一点值得注意。
 - **未验证 `--prune` 在真实残缺安装上的表现。** 它会删掉清单里没有的本地文件，
-  请先用 `efd plan --stale` 看清楚会删什么。
+  请先用 `efd plan --stale` 看清楚会删什么。**`StreamingAssets/VFS` 已从删除范围里排除**：
+  通道 B 热更新会往那里新增文件，而新增的条目不在通道 A 的清单里（实测 115 个文件、
+  7.23 GiB），按「不在清单里 = 陈旧」去删会直接删掉游戏资源。代价是旧版本留下的
+  VFS 残留（实测 67 个文件、0.71 GiB）也回收不了 —— 漏删好过误删。
 - **仅 Windows 验证过。** 代码本身是跨平台的，但 GUI 用了 `windll.shcore` 做高 DPI
   （已 try/except），其余部分是纯标准库。
 

@@ -230,6 +230,40 @@ class TestPrune(InstallerCase):
 
         self.assertTrue(stale.exists())
 
+    def test_prune_spares_hot_updated_vfs_files(self):
+        """通道 B 往 VFS 下加的文件不在通道 A 清单里，但它们不是陈旧文件。
+
+        少了这条排除，``--prune`` 会把热更新下来的资源当垃圾删掉。
+        """
+        hot = (Path(self.target) / "Endfield_Data" / "StreamingAssets"
+               / "VFS" / "AABBCCDD" / "EEFF0011.chk")
+        hot.parent.mkdir(parents=True, exist_ok=True)
+        hot.write_bytes(b"hot-updated resource")
+
+        plan = self.make_limited_plan(detect_stale=True)
+        self.assertEqual(plan.stale, [])
+
+        result = install(self.archive, plan, prune=True)
+        self.assertEqual(result.pruned, 0)
+        self.assertTrue(hot.exists())
+
+    def test_prune_exclusion_stops_at_the_vfs_subtree(self):
+        """排除只覆盖 VFS 子树：VFS 之外的陈旧文件照删不误。"""
+        hot = (Path(self.target) / "Endfield_Data" / "StreamingAssets"
+               / "VFS" / "keepme.chk")
+        hot.parent.mkdir(parents=True, exist_ok=True)
+        hot.write_bytes(b"keep")
+        junk = Path(self.target) / "Endfield_Data" / "leftover.chk"
+        junk.write_bytes(b"junk")
+
+        plan = self.make_limited_plan(detect_stale=True)
+        self.assertEqual(plan.stale, ["Endfield_Data/leftover.chk"])
+
+        result = install(self.archive, plan, prune=True)
+        self.assertEqual(result.pruned, 1)
+        self.assertTrue(hot.exists())
+        self.assertFalse(junk.exists())
+
 
 if __name__ == "__main__":
     unittest.main()

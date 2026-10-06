@@ -11,6 +11,7 @@ import os
 from dataclasses import dataclass, field
 
 from .archive import Archive, Entry
+from .config import HOT_UPDATE_PATHS
 from .util import UnsafePathError, crc32_file, safe_join
 
 
@@ -161,7 +162,11 @@ def make_plan(
         manifest = {e.name for e in files}
         stale = sorted(
             name for name, size in scan_local(target).items()
-            if size > 0 and name not in manifest
+            if size > 0
+            and name not in manifest
+            # 通道 B 会往这些子树里新增文件，它们不在这份清单里，但**不是多余**。
+            # 少了这一条，`--prune` 会把热更新下来的资源当垃圾删掉。
+            and not _excluded(name, HOT_UPDATE_PATHS)
         )
 
     return Plan(

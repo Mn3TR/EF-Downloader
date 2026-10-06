@@ -1,32 +1,25 @@
-"""把「多个分卷」伪装成一个连续可寻址的字节流。
+"""HTTP Range 分卷：块缓存 + 顺序预读 + 传输层重试。
 
-更新包是 54 个分卷，逻辑上等价于把 54 卷首尾相接得到的一个 53 GiB 单体 ZIP。
-标准库 ``zipfile`` 只接受一个 seekable 流，所以这里实现一个跨卷的 ``RawIOBase``。
+必须保留的细节：
 
-这样 **zip64 / deflate / CRC32 校验 / 中央目录解析全部由标准库负责**，
-我们一行都不用写——这也是整个方案能这么短的原因。
-
-三种 Volume 实现共用同一个 ``read_at(offset, n)`` 协议：
-
-* :class:`HttpVolume`  —— 生产用，HTTP Range 随机读，带块缓存与流量计数
-* :class:`FileVolume`  —— 本地已下载的分卷
-* :class:`MissingVolume` —— 离线夹具用占位（保证偏移量正确，被读到就报错）
-"""
+* **块缓存**：中央目录的解析会在末尾反复小幅回看，缓存能把请求数压下来。
+  它同时也是顺序预读的落点——请求先对齐到块，块才能被提前取来复用。
+* **206 校验**：若 CDN 不再支持 Range 而返回 200 全文件，偏移量会全错。
+  静默接受这种响应会写出损坏的文件，所以宁可立刻报错。
+* **锁只护住缓存和计数**：网络请求一律在锁外发，否则预读线程会互相排队，
+  并发就等于没加。"""
 
 from __future__ import annotations
 
-import bisect
-import concurrent.futures
 import http.client
-import io
-import os
 import threading
 import time
 import urllib.request
-from collections import OrderedDict
-from typing import Protocol, runtime_checkable
 
-from .config import DEFAULT_TIMEOUT, USER_AGENT
+from collections import OrderedDict
+
+from ..core.config import DEFAULT_TIMEOUT, USER_AGENT
+from .prefetch import Prefetcher
 
 RANGE_LOG_CAP = 200
 
@@ -40,120 +33,6 @@ FETCH_BACKOFF = 0.5
 
 class RangeError(RuntimeError):
     """Range 请求没被正确满足。"""
-
-
-class Prefetcher:
-    """顺序预读用的共享线程池。
-
-    ``jobs`` 是**总**并发数：1 个消费者线程 + ``jobs - 1`` 个预读线程。
-    ``jobs == 1`` 时根本不建池，也就是完全没有预读（改动前的行为）。
-
-    预读只对**顺序前向读**有意义。安装计划本来就按偏移排好序
-    （``planner.make_plan`` 里的 ``need.sort(key=lambda e: e.offset)``），
-    所以消费者是单调前进的，下一个要读的区间可以精确预测：
-    就是 ``offset + n``、``offset + 2n`` …… 依次类推。
-
-    这也意味着预读**不会**退回散点随机读——那条路我们量过，8 并发也只有
-    2.7 → 3.3 MB/s（见 docs/REPORT.md）。预读只是把顺序读里每次请求的
-    建连与握手延迟叠起来，读的仍是同一条顺序路径。
-    """
-
-    def __init__(self, jobs: int = 1):
-        self.jobs = max(1, int(jobs))
-        self.fetched = 0  # 预读提前拿到、并且真的被用上的字节
-        self.wasted = 0  # 预读拿了却没人要的字节（计划有空洞时的上界）
-        self._stat_lock = threading.Lock()
-        self._pool = (
-            concurrent.futures.ThreadPoolExecutor(
-                max_workers=self.jobs - 1, thread_name_prefix="efd-prefetch"
-            )
-            if self.jobs > 1
-            else None
-        )
-
-    @property
-    def enabled(self) -> bool:
-        return self._pool is not None
-
-    def note_used(self, n: int) -> None:
-        with self._stat_lock:
-            self.fetched += n
-
-    def note_wasted(self, n: int) -> None:
-        with self._stat_lock:
-            self.wasted += n
-
-    def submit(self, fn, *args):
-        if self._pool is None:
-            return None
-        try:
-            return self._pool.submit(fn, *args)
-        except RuntimeError:  # 池已经关了（收尾阶段还在预读）
-            return None
-
-    def shutdown(self) -> None:
-        """收尾。**故意不取消**排队中的任务。
-
-        ``cancel_futures=True`` 会让还没开跑的任务永远不执行，于是它们登记
-        的取块权再也没人交还——任何等在那个块上的线程都会挂死。让它们跑完
-        更安全：任务一进来就看见 ``_closed``，立刻原样退出，代价只有一次判断。
-        """
-        pool, self._pool = self._pool, None
-        if pool is not None:
-            pool.shutdown(wait=False)
-
-    def __repr__(self) -> str:
-        return f"Prefetcher(jobs={self.jobs}, fetched={self.fetched}, wasted={self.wasted})"
-
-
-@runtime_checkable
-class Volume(Protocol):
-    """分卷协议：只需要一个 ``size`` 和一个 ``read_at``。"""
-
-    size: int
-
-    def read_at(self, offset: int, n: int) -> bytes:  # pragma: no cover - 协议
-        ...
-
-
-class FileVolume:
-    """本地已下载的分卷。"""
-
-    def __init__(self, path: str):
-        self.path = path
-        self.size = os.path.getsize(path)
-        self._f = open(path, "rb")
-
-    def read_at(self, offset: int, n: int) -> bytes:
-        self._f.seek(offset)
-        return self._f.read(n)
-
-    def close(self) -> None:
-        self._f.close()
-
-    def __repr__(self) -> str:
-        return f"FileVolume({os.path.basename(self.path)!r}, size={self.size})"
-
-
-class MissingVolume:
-    """未下载的分卷占位。
-
-    保留真实 ``size`` 是关键：只有尺寸对，后面所有分卷的起始偏移量才正确，
-    才能在没有全部数据的情况下解析出中央目录（见 tests/test_archive_fixture.py）。
-    """
-
-    def __init__(self, size: int, index: int):
-        self.size = size
-        self.index = index
-
-    def read_at(self, offset: int, n: int) -> bytes:
-        raise RuntimeError(f"分卷 {self.index:03d} 不在本地（请求 offset={offset} n={n}）")
-
-    def close(self) -> None:
-        pass
-
-    def __repr__(self) -> str:
-        return f"MissingVolume(index={self.index}, size={self.size})"
 
 
 class HttpVolume:
@@ -432,98 +311,3 @@ class HttpVolume:
 
     def __repr__(self) -> str:
         return f"HttpVolume(index={self.index}, size={self.size}, bytes={self.bytes})"
-
-
-class ConcatReader(io.RawIOBase):
-    """把若干分卷拼成一个可 seek 的连续字节流。"""
-
-    def __init__(self, volumes):
-        self.volumes = list(volumes)
-        self.starts: list[int] = []
-        off = 0
-        for vol in self.volumes:
-            self.starts.append(off)
-            off += vol.size
-        self.total = off
-        self.pos = 0
-
-    # -- io 接口 -------------------------------------------------------------
-    def readable(self) -> bool:
-        return True
-
-    def seekable(self) -> bool:
-        return True
-
-    def tell(self) -> int:
-        return self.pos
-
-    def seek(self, offset: int, whence: int = io.SEEK_SET) -> int:
-        if whence == io.SEEK_SET:
-            pos = offset
-        elif whence == io.SEEK_CUR:
-            pos = self.pos + offset
-        elif whence == io.SEEK_END:
-            pos = self.total + offset
-        else:
-            raise ValueError(f"无效的 whence: {whence}")
-        self.pos = max(0, min(pos, self.total))
-        return self.pos
-
-    def read(self, n: int = -1) -> bytes:
-        out = bytearray()
-        if n is None or n < 0:
-            n = self.total - self.pos
-        n = min(n, self.total - self.pos)
-        if n <= 0:
-            return b""
-
-        off = self.pos
-        while n > 0:
-            i = bisect.bisect_right(self.starts, off) - 1
-            vol = self.volumes[i]
-            inner = off - self.starts[i]
-            take = min(n, vol.size - inner)
-            chunk = vol.read_at(inner, take)
-            if not chunk:
-                raise RuntimeError(f"分卷 {i} 在偏移 {inner} 处提前 EOF")
-            out += chunk
-            off += len(chunk)
-            n -= len(chunk)
-        self.pos = off
-        return bytes(out)
-
-    def readinto(self, b) -> int:
-        data = self.read(len(b))
-        b[: len(data)] = data
-        return len(data)
-
-    def close(self) -> None:
-        if self.closed:
-            return
-        for vol in self.volumes:
-            try:
-                vol.close()
-            except Exception:  # noqa: BLE001 - 关闭失败不该掩盖真正的错误
-                pass
-        super().close()
-
-    def __repr__(self) -> str:
-        return f"ConcatReader({len(self.volumes)} 卷, total={self.total})"
-
-
-def open_stream(volumes, buffer_size: int = 1 << 20) -> io.BufferedReader:
-    """把分卷列表包成一个可直接喂给 ``zipfile`` 的缓冲流。"""
-    return io.BufferedReader(ConcatReader(volumes), buffer_size=buffer_size)
-
-
-__all__ = [
-    "RANGE_LOG_CAP",
-    "RangeError",
-    "Prefetcher",
-    "Volume",
-    "FileVolume",
-    "MissingVolume",
-    "HttpVolume",
-    "ConcatReader",
-    "open_stream",
-]

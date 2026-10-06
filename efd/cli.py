@@ -14,20 +14,21 @@ import sys
 import zipfile
 from collections import defaultdict
 
-from . import __version__, config, detect
-from .archive import Archive, open_remote
-from .installer import install
-from .planner import make_plan
-from .seed import SeedError
-from .throttle import (
+from . import __version__
+from .core import config, detect
+from .core.archive import Archive, open_remote
+from .core.installer import install
+from .core.planner import make_plan
+from .core.seed import SeedError
+from .core.throttle import (
     DEFAULT_JOBS,
     RateError,
     check_jobs,
     format_rate,
     parse_rate,
 )
-from .util import human, human_time, setup_output_encoding
-from .volumes import RangeError
+from .core.util import human, human_time, setup_output_encoding
+from .net import RangeError
 
 EXIT_OK = 0
 EXIT_ERROR = 1
@@ -350,7 +351,7 @@ def cmd_probe(args) -> int:
 
 
 def cmd_gui(args) -> int:
-    from .gui import main as gui_main
+    from .ui.entry import main as gui_main
 
     gui_main()
     return EXIT_OK

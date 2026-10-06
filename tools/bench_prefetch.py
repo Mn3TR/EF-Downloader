@@ -31,10 +31,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from efd import seed as seed_mod  # noqa: E402
-from efd.throttle import RateLimiter  # noqa: E402
-from efd.volumes import HttpVolume, Prefetcher  # noqa: E402
-from efd.util import human  # noqa: E402
+from efd.core import seed as seed_mod  # noqa: E402
+from efd.core.throttle import RateLimiter  # noqa: E402
+from efd.net import HttpVolume, Prefetcher  # noqa: E402
+from efd.core.util import human  # noqa: E402
 
 SPAN = int(sys.argv[1]) if len(sys.argv) > 1 else 64
 BLOCK = 1 << 20

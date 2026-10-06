@@ -29,9 +29,9 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from efd import detect  # noqa: E402
-from efd.archive import open_remote  # noqa: E402
-from efd.planner import make_plan  # noqa: E402
-from efd.util import human  # noqa: E402
+from efd.core.archive import open_remote  # noqa: E402
+from efd.core.planner import make_plan  # noqa: E402
+from efd.core.util import human  # noqa: E402
 
 BLOCK = 1 << 20
 

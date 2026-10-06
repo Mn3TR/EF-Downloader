@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import unittest
 
-from efd.config import seed_payload
-from efd.seed import SeedError, parse_release
+from efd.core.config import seed_payload
+from efd.core.seed import SeedError, parse_release
 
 GOOD = {
     "proxy_rsps": [

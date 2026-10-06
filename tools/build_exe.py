@@ -150,7 +150,7 @@ def _kill_tree(pid: int) -> None:
 
 
 def verify(exe: Path) -> bool:
-    from efd.gui import APP_TITLE
+    from efd.ui.theme import APP_TITLE
 
     print("\n[verify] 1/3 命令行路径（--version）")
     # 必须显式指定 UTF-8：efd 在管道场景会写 UTF-8（见 efd.cli._setup_output_encoding），
@@ -200,7 +200,7 @@ def verify(exe: Path) -> bool:
 
 
 def main(argv: list[str] | None = None) -> int:
-    from efd.util import setup_output_encoding
+    from efd.core.util import setup_output_encoding
 
     # 和 CLI 用同一套：管道/重定向时写 UTF-8，免得本脚本的中文在
     # PowerShell 7 / CI 里变成 U+FFFD。

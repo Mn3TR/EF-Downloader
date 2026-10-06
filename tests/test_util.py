@@ -7,7 +7,7 @@ import tempfile
 import unittest
 import zlib
 
-from efd.util import (
+from efd.core.util import (
     UnsafePathError,
     crc32_file,
     free_bytes,

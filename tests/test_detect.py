@@ -12,7 +12,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from efd import detect
+from efd.core import detect
 
 
 class TestLooksLikeGameDir(unittest.TestCase):

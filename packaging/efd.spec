@@ -10,7 +10,7 @@
 
   * 双击（无参数）        → 直接进图形界面
   * 终端 `EFD.exe plan …` → 正常命令行输出
-  * `EFD.exe gui`         → 由 efd.gui.detach_console() 摘掉控制台窗口
+  * `EFD.exe gui`         → 由 efd.ui.entry.detach_console() 摘掉控制台窗口
 
 为什么不用 ``--noconsole``：那会把 CLI 的输出一起干掉。控制台模式 +
 FreeConsole 能同时满足两种用法，而且**只需要一个文件**。
@@ -82,7 +82,9 @@ a = Analysis(  # noqa: F821
     # data/ 下的 6.7 MB 夹具只服务于测试，不该进 exe。
     datas=[],
     # efd.cli 里 gui 是函数内导入；显式列出来，保证 tkinter 一定被打进去。
-    hiddenimports=["efd.gui"],
+    # 拆包后这里必须写**真正含 tkinter 的模块**（efd.ui.entry / efd.ui.app），
+    # 写成已经删掉的 efd.gui 会让 PyInstaller 静默少收文件。
+    hiddenimports=["efd.ui.entry", "efd.ui.app", "efd.cli"],
     hookspath=[],
     runtime_hooks=[],
     excludes=EXCLUDES,

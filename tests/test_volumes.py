@@ -14,7 +14,7 @@ import unittest
 import urllib.error
 from unittest import mock
 
-from efd.volumes import (
+from efd.net import (
     ConcatReader,
     HttpVolume,
     MissingVolume,
@@ -165,7 +165,7 @@ class TestPrefetch(unittest.TestCase):
             body = self.server[start : end + 1]
             return FakeResponse(body)
 
-        patcher = mock.patch("efd.volumes.urllib.request.urlopen", fake_urlopen)
+        patcher = mock.patch("efd.net.http.urllib.request.urlopen", fake_urlopen)
         patcher.start()
         self.addCleanup(patcher.stop)
 
@@ -386,11 +386,11 @@ class TestFetchRetry(unittest.TestCase):
                 body = body[: max(0, len(body) - self.short_by)]
             return FakeResponse(body)
 
-        patcher = mock.patch("efd.volumes.urllib.request.urlopen", fake_urlopen)
+        patcher = mock.patch("efd.net.http.urllib.request.urlopen", fake_urlopen)
         patcher.start()
         self.addCleanup(patcher.stop)
         # 退避只为线上省事，测试里别真的睡。
-        backoff = mock.patch("efd.volumes.FETCH_BACKOFF", 0.0)
+        backoff = mock.patch("efd.net.http.FETCH_BACKOFF", 0.0)
         backoff.start()
         self.addCleanup(backoff.stop)
 
@@ -410,7 +410,7 @@ class TestFetchRetry(unittest.TestCase):
 
     def test_every_fetch_attempt_is_bounded(self):
         """一直失败时必须如实抛出去，不能无限重试把安装挂死。"""
-        from efd.volumes import FETCH_ATTEMPTS
+        from efd.net.http import FETCH_ATTEMPTS
 
         self.fail_times = 99
         self.error = ConnectionResetError("connection reset by peer")

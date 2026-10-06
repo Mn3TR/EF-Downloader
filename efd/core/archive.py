@@ -14,13 +14,10 @@ from dataclasses import dataclass
 
 from . import seed as seed_mod
 from .throttle import RateLimiter
-from .volumes import (
-    FileVolume,
-    HttpVolume,
-    MissingVolume,
-    Prefetcher,
-    open_stream,
-)
+from ..net.http import HttpVolume
+from ..net.prefetch import Prefetcher
+from ..net.stream import open_stream
+from ..net.volume import FileVolume, MissingVolume
 
 
 def close_volumes(volumes) -> None:

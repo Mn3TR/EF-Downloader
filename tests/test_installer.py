@@ -11,11 +11,11 @@ import threading
 import unittest
 from pathlib import Path
 
-from efd.archive import load_pack_sizes, open_local
-from efd.config import VOLUME_SIZE
-from efd.installer import install
-from efd.planner import make_plan
-from efd.util import safe_join
+from efd.core.archive import load_pack_sizes, open_local
+from efd.core.config import VOLUME_SIZE
+from efd.core.installer import install
+from efd.core.planner import make_plan
+from efd.core.util import safe_join
 
 FIXTURES = Path(__file__).resolve().parent.parent / "data" / "fixtures"
 requires_fixture = unittest.skipUnless(
@@ -161,7 +161,7 @@ class TestStop(InstallerCase):
         """
         from unittest import mock
 
-        from efd import installer as inst
+        from efd.core import installer as inst
 
         plan = self.make_limited_plan()
         self.assertGreaterEqual(len(plan.need), 2)
@@ -192,7 +192,7 @@ class TestStop(InstallerCase):
         """
         from unittest import mock
 
-        from efd import installer as inst
+        from efd.core import installer as inst
 
         plan = self.make_limited_plan()
         seen = []
@@ -215,7 +215,7 @@ class TestStop(InstallerCase):
         """
         from unittest import mock
 
-        from efd import installer as inst
+        from efd.core import installer as inst
 
         plan = self.make_limited_plan()
         event = threading.Event()

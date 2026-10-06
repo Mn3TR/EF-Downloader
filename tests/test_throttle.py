@@ -10,7 +10,7 @@ import threading
 import time
 import unittest
 
-from efd.throttle import (
+from efd.core.throttle import (
     RateError,
     RateLimiter,
     check_jobs,

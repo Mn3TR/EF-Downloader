@@ -30,10 +30,12 @@ dependencies = []
 efd = "efd.cli:main"
 
 [project.gui-scripts]
-efd-gui = "efd.gui:main"
+efd-gui = "efd.ui.entry:main"
 
 [tool.setuptools]
-packages = ["efd"]
+# 拆成子包后必须逐个列出：只写 ["efd"] 的话
+# efd.core / efd.net / efd.ui 会被静默漏装，装上后 import 即崩。
+packages = ["efd", "efd.core", "efd.net", "efd.ui"]
 license-files = ["LICENSE"]
 
 [tool.setuptools.dynamic]

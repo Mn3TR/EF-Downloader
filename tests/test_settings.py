@@ -13,8 +13,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from efd import settings
-from efd.throttle import DEFAULT_JOBS
+from efd.core import settings
+from efd.core.throttle import DEFAULT_JOBS
 
 
 class SettingsCase(unittest.TestCase):
@@ -79,17 +79,17 @@ class TestReadWrite(SettingsCase):
 class TestPrecedence(SettingsCase):
     def test_remembered_wins_over_detection(self):
         with mock.patch.object(settings, "remembered_target", return_value="D:/picked"):
-            with mock.patch("efd.detect.suggest_target", return_value="D:/detected"):
+            with mock.patch("efd.core.detect.suggest_target", return_value="D:/detected"):
                 self.assertEqual(settings.initial_target(), "D:/picked")
 
     def test_falls_back_to_detection(self):
         with mock.patch.object(settings, "remembered_target", return_value=""):
-            with mock.patch("efd.detect.suggest_target", return_value="D:/detected"):
+            with mock.patch("efd.core.detect.suggest_target", return_value="D:/detected"):
                 self.assertEqual(settings.initial_target(), "D:/detected")
 
     def test_empty_when_nothing_known(self):
         with mock.patch.object(settings, "remembered_target", return_value=""):
-            with mock.patch("efd.detect.suggest_target", return_value=""):
+            with mock.patch("efd.core.detect.suggest_target", return_value=""):
                 self.assertEqual(settings.initial_target(), "")
 
 

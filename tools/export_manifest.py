@@ -18,7 +18,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from efd.archive import load_pack_sizes, open_local  # noqa: E402
+from efd.core.archive import load_pack_sizes, open_local  # noqa: E402
 
 FIXTURES = ROOT / "data" / "fixtures"
 OUT = ROOT / "data" / "package_manifest.csv"

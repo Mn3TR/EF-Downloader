@@ -38,14 +38,14 @@ def state(widget) -> str:
 @unittest.skipIf(_REASON is not None, _REASON or "")
 class TestWindowConstruction(unittest.TestCase):
     def setUp(self):
-        from efd.gui import App
+        from efd.ui import App
 
         self.app = App()
         self.addCleanup(self.app.destroy)
 
     def test_title_is_ef_downloader(self):
         """窗口标题就是品牌名——叫「省空间安装器」没人知道这是什么。"""
-        from efd.gui import APP_TITLE
+        from efd.ui.theme import APP_TITLE
 
         self.assertEqual(APP_TITLE, "EF DOWNLOADER")
         self.assertEqual(self.app.title(), "EF DOWNLOADER")
@@ -59,13 +59,13 @@ class TestWindowConstruction(unittest.TestCase):
 
     def test_target_follows_settings_then_detection(self):
         """默认值来自「上次用过的 → 注册表探测」，不能是写死的开发者路径。"""
-        from efd import detect, settings
+        from efd.core import detect, settings
 
         expected = settings.remembered_target() or detect.suggest_target()
         self.assertEqual(self.app.var_target.get(), expected)
 
     def test_target_is_never_a_hardcoded_dev_path(self):
-        from efd import gui
+        from efd.ui import theme as gui
 
         self.assertEqual(gui.DEFAULT_TARGET, "")
 
@@ -103,8 +103,8 @@ class TestPlanRendering(unittest.TestCase):
     """把计划渲染到面板上——纯显示逻辑，不需要网络。"""
 
     def setUp(self):
-        from efd.archive import load_pack_sizes, open_local
-        from efd.gui import App
+        from efd.core.archive import load_pack_sizes, open_local
+        from efd.ui import App
         from pathlib import Path
 
         fixtures = Path(__file__).resolve().parent.parent / "data" / "fixtures"
@@ -126,7 +126,7 @@ class TestPlanRendering(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.target, ignore_errors=True)
 
     def test_show_plan_renders_numbers(self):
-        from efd.planner import make_plan
+        from efd.core.planner import make_plan
 
         plan = make_plan(self.archive, self.target)
         self.app._show_plan(plan)
@@ -148,8 +148,8 @@ class TestPlanRendering(unittest.TestCase):
 
     def test_plan_panel_reports_a_real_saving(self):
         """这个工具的卖点就是省磁盘，数字必须真的算出来。"""
-        from efd.planner import make_plan
-        from efd.util import human
+        from efd.core.planner import make_plan
+        from efd.core.util import human
 
         plan = make_plan(self.archive, self.target)
         self.app._show_plan(plan)
@@ -170,7 +170,7 @@ class TestPlanRendering(unittest.TestCase):
         self.assertFalse(self.app.detail.winfo_manager(), "详情收起后没有真正下线")
 
     def test_progress_updates_bar_and_percent(self):
-        from efd.installer import Progress
+        from efd.core.installer import Progress
 
         p = Progress(
             done=53, total=1061,
@@ -199,8 +199,8 @@ class TestCheckUnlocksInstall(unittest.TestCase):
     """
 
     def setUp(self):
-        from efd.archive import load_pack_sizes, open_local
-        from efd.gui import App
+        from efd.core.archive import load_pack_sizes, open_local
+        from efd.ui import App
         from pathlib import Path
         import shutil
         import tempfile
@@ -222,10 +222,10 @@ class TestCheckUnlocksInstall(unittest.TestCase):
         """跑一次真的检查，返回 Worker 发出的消息。"""
         from unittest import mock
 
-        from efd import gui
+        from efd.ui import messages
 
-        worker = gui.Worker(self.app.q, self.target, False, False)
-        with mock.patch.object(gui, "open_remote", return_value=self.archive):
+        worker = messages.Worker(self.app.q, self.target, False, False)
+        with mock.patch.object(messages, "open_remote", return_value=self.archive):
             worker.run()  # 同步跑：不需要真的起线程，消息照样进队列
 
         messages = []
@@ -238,7 +238,7 @@ class TestCheckUnlocksInstall(unittest.TestCase):
 
     def test_check_run_emits_a_terminal_message(self):
         """检查这一轮必须以「结束」消息收尾，否则界面无从知道该解锁。"""
-        from efd.gui import TERMINAL_KINDS
+        from efd.ui import TERMINAL_KINDS
 
         messages = self._run_a_real_check()
         kinds = [k for k, _ in messages]
@@ -318,15 +318,15 @@ class TestFinishTellsTheTruth(unittest.TestCase):
     """
 
     def setUp(self):
-        from efd import gui
-        from efd.gui import App
+        from efd.ui import App
+        from efd.ui import handlers
 
         fixtures = Path(__file__).resolve().parent.parent / "data" / "fixtures"
         if not (fixtures / "vol054.bin").exists():
             self.skipTest("缺少离线夹具")
 
-        from efd.archive import load_pack_sizes, open_local
-        from efd.planner import make_plan
+        from efd.core.archive import load_pack_sizes, open_local
+        from efd.core.planner import make_plan
 
         archive = open_local(
             str(fixtures), load_pack_sizes(str(fixtures / "pack_sizes.json"))
@@ -342,13 +342,13 @@ class TestFinishTellsTheTruth(unittest.TestCase):
         self.warn: list[tuple] = []
         for name, sink in (("showinfo", self.info), ("showwarning", self.warn),
                            ("showerror", self.warn)):
-            p = mock.patch.object(gui.messagebox, name,
+            p = mock.patch.object(handlers.messagebox, name,
                                   side_effect=lambda *a, _s=sink, **k: _s.append(a))
             p.start()
             self.addCleanup(p.stop)
 
     def result(self, **kw):
-        from efd.installer import Result
+        from efd.core.installer import Result
 
         base = dict(done=0, written=0, net_bytes=0, elapsed=1.0, errors=[])
         base.update(kw)

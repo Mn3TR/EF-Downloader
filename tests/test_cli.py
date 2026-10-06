@@ -108,12 +108,12 @@ class TestExcludeResolution(unittest.TestCase):
         self.assertEqual(got, ("a/", "b/"))
 
     def test_exclude_ace_preset(self):
-        from efd.config import EXCLUDE_ACE
+        from efd.core.config import EXCLUDE_ACE
         got = self._resolve(["plan", "--target", TARGET, "--exclude-ace"])
         self.assertEqual(set(got), set(EXCLUDE_ACE))
 
     def test_exclude_streaming_preset(self):
-        from efd.config import EXCLUDE_STREAMING
+        from efd.core.config import EXCLUDE_STREAMING
         got = self._resolve(["plan", "--target", TARGET, "--exclude-streaming"])
         self.assertEqual(set(got), set(EXCLUDE_STREAMING))
 
@@ -146,16 +146,16 @@ class TestEntryPoints(unittest.TestCase):
 
         gui 模块在函数内部才 import，所以替换 efd.gui.main 就能拦住。
         """
-        import efd.gui
+        from efd.ui import entry
         import efd.cli
 
         calls = []
-        original = efd.gui.main
-        efd.gui.main = lambda: calls.append(1)
+        original = entry.main
+        entry.main = lambda: calls.append(1)
         try:
             self.assertEqual(main(["gui"]), 0)
         finally:
-            efd.gui.main = original
+            entry.main = original
         self.assertEqual(calls, [1], "gui 子命令没有调用 efd.gui.main")
 
 
@@ -178,7 +178,8 @@ class TestResolveTarget(unittest.TestCase):
         self.assertEqual(_resolve_target(self._args("X:/y")), "X:/y")
 
     def test_falls_back_to_detection(self):
-        from efd import cli, detect
+        from efd import cli
+        from efd.core import detect
 
         with mock.patch.object(detect, "suggest_target", return_value="D:/found"):
             with redirect_stdout(io.StringIO()) as buf:
@@ -186,14 +187,16 @@ class TestResolveTarget(unittest.TestCase):
         self.assertIn("自动探测到", buf.getvalue())
 
     def test_explicit_target_does_not_trigger_detection(self):
-        from efd import cli, detect
+        from efd import cli
+        from efd.core import detect
 
         with mock.patch.object(detect, "suggest_target") as spy:
             cli._resolve_target(self._args("X:/y"))
         spy.assert_not_called()
 
     def test_errors_when_nothing_found(self):
-        from efd import cli, detect
+        from efd import cli
+        from efd.core import detect
 
         with mock.patch.object(detect, "suggest_target", return_value=""):
             with self.assertRaises(SystemExit) as ctx:
@@ -202,7 +205,8 @@ class TestResolveTarget(unittest.TestCase):
 
     def test_never_falls_back_to_cwd(self):
         """兜底成当前目录是最危险的做法——那会把 58 GB 写进随便什么地方。"""
-        from efd import cli, detect
+        from efd import cli
+        from efd.core import detect
 
         with mock.patch.object(detect, "suggest_target", return_value=""):
             with self.assertRaises(SystemExit):
@@ -213,10 +217,10 @@ class TestFrozenBehaviour(unittest.TestCase):
     """打包成 exe 后的行为。用 sys.frozen 模拟冻结态，不需要真的构建。"""
 
     def setUp(self):
-        import efd.gui
+        from efd.ui import entry as gui_entry
 
-        self.gui = efd.gui
-        self.original_main = efd.gui.main
+        self.gui = gui_entry
+        self.original_main = gui_entry.main
         self.saved_argv = sys.argv
 
     def tearDown(self):
@@ -267,7 +271,7 @@ class TestDetachConsole(unittest.TestCase):
 
         真的 FreeConsole 会把这个测试进程从控制台摘下来，之后所有输出都看不见。
         """
-        from efd.gui import detach_console
+        from efd.ui.entry import detach_console
 
         if hasattr(sys, "frozen"):
             self.skipTest("当前进程已被冻结")

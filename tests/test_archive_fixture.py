@@ -12,10 +12,10 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 
-from efd.archive import open_local, load_pack_sizes
-from efd.config import VOLUME_SIZE
-from efd.planner import make_plan
-from efd.util import safe_join
+from efd.core.archive import open_local, load_pack_sizes
+from efd.core.config import VOLUME_SIZE
+from efd.core.planner import make_plan
+from efd.core.util import safe_join
 
 ROOT = Path(__file__).resolve().parent.parent
 FIXTURES = ROOT / "data" / "fixtures"
@@ -207,7 +207,7 @@ class TestPlannerAgainstFixture(unittest.TestCase):
         self.assertEqual(offsets, sorted(offsets), "必须按归档顺序，保证零回退读")
 
     def test_exclude_streaming(self):
-        from efd.config import EXCLUDE_STREAMING
+        from efd.core.config import EXCLUDE_STREAMING
         plan = make_plan(self.archive, str(self.tmp),
                          exclude_prefixes=EXCLUDE_STREAMING)
         self.assertGreater(len(plan.excluded), 0)

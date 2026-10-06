@@ -39,10 +39,12 @@ class TestWindowConstruction(unittest.TestCase):
         self.app = App()
         self.addCleanup(self.app.destroy)
 
-    def test_title(self):
+    def test_title_is_ef_downloader(self):
+        """窗口标题就是品牌名——叫「省空间安装器」没人知道这是什么。"""
         from efd.gui import APP_TITLE
 
-        self.assertEqual(self.app.title(), APP_TITLE)
+        self.assertEqual(APP_TITLE, "EF DOWNLOADER")
+        self.assertEqual(self.app.title(), "EF DOWNLOADER")
 
     def test_initial_state(self):
         self.assertIsNone(self.app.plan)
@@ -51,11 +53,12 @@ class TestWindowConstruction(unittest.TestCase):
         self.assertEqual(state(self.app.btn_check), "normal")
         self.assertEqual(state(self.app.btn_stop), "disabled")
 
-    def test_target_comes_from_detection(self):
-        """默认值必须来自探测，不能是写死的开发者路径。"""
-        from efd import detect
+    def test_target_follows_settings_then_detection(self):
+        """默认值来自「上次用过的 → 注册表探测」，不能是写死的开发者路径。"""
+        from efd import detect, settings
 
-        self.assertEqual(self.app.var_target.get(), detect.suggest_target())
+        expected = settings.remembered_target() or detect.suggest_target()
+        self.assertEqual(self.app.var_target.get(), expected)
 
     def test_target_is_never_a_hardcoded_dev_path(self):
         from efd import gui
@@ -124,13 +127,59 @@ class TestPlanRendering(unittest.TestCase):
         plan = make_plan(self.archive, self.target)
         self.app._show_plan(plan)
 
+        # 头部网格：一眼要能看到的数字
+        self.assertEqual(self.app.v_version.cget("text"), plan.version)
+        self.assertIn(str(plan.need_count), self.app.v_need.cget("text"))
+        self.assertIn(str(plan.already_count), self.app.v_skip.cget("text"))
+        self.assertTrue(self.app.v_save.cget("text").strip(), "省下多少是空的")
+
+        # 详情：原始数字仍然完整可查
         text = self.app.txt_plan.get("1.0", "end")
-        self.assertIn(plan.version, text)
         self.assertIn(str(plan.need_count), text)
         self.assertIn("峰值磁盘", text)
+
         # 计划到了，安装按钮就该解锁
         self.app._busy(False)
         self.assertEqual(state(self.app.btn_go), "normal")
+
+    def test_plan_panel_reports_a_real_saving(self):
+        """这个工具的卖点就是省磁盘，数字必须真的算出来。"""
+        from efd.planner import make_plan
+        from efd.util import human
+
+        plan = make_plan(self.archive, self.target)
+        self.app._show_plan(plan)
+        self.assertGreater(plan.saving, 0)
+        # v_peak 里是数值本身，「峰值磁盘」是旁边那格的行名
+        self.assertIn("本工具", self.app.v_peak.cget("text"))
+        self.assertIn("官方方式", self.app.v_peak.cget("text"))
+        self.assertIn(human(plan.saving), self.app.v_save.cget("text"))
+        self.assertEqual(self.app.lbl_pct.cget("text"), "0.0%")
+
+    def test_detail_panel_toggles(self):
+        self.assertFalse(self.app._detail_shown)
+        self.app._toggle_detail()
+        self.assertTrue(self.app._detail_shown)
+        self.assertTrue(self.app.detail.winfo_manager(), "详情展开后没有真正上屏")
+        self.app._toggle_detail()
+        self.assertFalse(self.app._detail_shown)
+        self.assertFalse(self.app.detail.winfo_manager(), "详情收起后没有真正下线")
+
+    def test_progress_updates_bar_and_percent(self):
+        from efd.installer import Progress
+
+        p = Progress(
+            done=53, total=1061,
+            written=2_800_000_000, total_uncompressed=60_000_000_000,
+            net_bytes=2_600_000_000, total_compressed=56_914_606_683,
+            speed=5_600_000.0, eta=9000.0, current="Endfield_Data/x/y.bundle",
+        )
+        self.app._show_progress(p)
+        # 进度条是整数刻度（maximum=1000，即 0.1% 分辨率）
+        self.assertEqual(int(self.app.bar["value"]), int(p.fraction * 1000))
+        self.assertIn("%", self.app.lbl_pct.cget("text"))
+        self.assertIn("53/1061", self.app.lbl_stats.cget("text"))
+        self.assertIn("y.bundle", self.app.lbl_cur.cget("text"))
 
 
 if __name__ == "__main__":

@@ -53,12 +53,12 @@ with open(VERSION_FILE, "w", encoding="utf-8") as _f:
     StringFileInfo([
       StringTable('080404B0', [
         StringStruct('CompanyName', 'Mn3TR'),
-        StringStruct('FileDescription', '终末地省空间安装器'),
+        StringStruct('FileDescription', 'EF DOWNLOADER'),
         StringStruct('FileVersion', '{__version__}'),
         StringStruct('InternalName', 'EFD'),
         StringStruct('LegalCopyright', 'Copyright (c) 2026 Mn3TR. MIT License.'),
         StringStruct('OriginalFilename', 'EFD.exe'),
-        StringStruct('ProductName', 'EFD'),
+        StringStruct('ProductName', 'EF DOWNLOADER'),
         StringStruct('ProductVersion', '{__version__}')
       ])
     ]),

@@ -338,6 +338,7 @@ EFD(EFDownloader)/
 │   ├── config.py            常量与接口参数
 │   ├── util.py              格式化 / CRC32 / safe_join / 输出编码
 │   ├── detect.py            从注册表定位游戏目录
+│   ├── settings.py          记住上次用过的安装目录
 │   ├── seed.py              Seed 接口客户端
 │   ├── volumes.py           跨卷可寻址流（核心）
 │   ├── archive.py           ZIP 归档视图
@@ -346,7 +347,7 @@ EFD(EFDownloader)/
 │   ├── cli.py               命令行
 │   └── gui.py               图形界面（Tkinter）
 ├── packaging/               PyInstaller 入口、spec、图标
-├── tests/                   143 个用例，标准库 unittest
+├── tests/                   157 个用例，标准库 unittest
 ├── data/
 │   ├── package_manifest.csv 1692 条清单（派生物）
 │   ├── hotfix_index_main.json / hotfix_index_initial.json

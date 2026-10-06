@@ -152,6 +152,7 @@ efd/
 ├── config.py      常量与接口参数（改接口先看这里）
 ├── util.py        格式化、CRC32、路径越界防护、输出编码
 ├── detect.py      从注册表定位游戏目录（默认值不写死）
+├── settings.py    记住上次用过的安装目录
 ├── seed.py        Seed 接口客户端
 ├── volumes.py     分卷 → 连续流（核心）
 ├── archive.py     ZIP 归档视图
@@ -167,7 +168,7 @@ build.cmd          双击构建 exe
 run-gui.cmd        双击从源码启动图形界面
 LICENSE            MIT
 
-tests/             标准库 unittest，143 个用例，大部分不需要网络
+tests/             标准库 unittest，157 个用例，大部分不需要网络
 data/              派生物与离线夹具
 docs/              调查报告与取证样本
 

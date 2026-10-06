@@ -17,9 +17,11 @@ from __future__ import annotations
 
 import bisect
 import concurrent.futures
+import http.client
 import io
 import os
 import threading
+import time
 import urllib.request
 from collections import OrderedDict
 from typing import Protocol, runtime_checkable
@@ -27,6 +29,13 @@ from typing import Protocol, runtime_checkable
 from .config import DEFAULT_TIMEOUT, USER_AGENT
 
 RANGE_LOG_CAP = 200
+
+# 传输层抖动要重试。抖动**不是**「这个文件下不了」：实测 400 次 Range 请求里
+# 就有 1 次 ``ssl.SSLEOFError: UNEXPECTED_EOF_WHILE_READING``（0.25%）。单看
+# 很小，但一个 1.1 GiB 的文件要发上千次请求，不重试的话每次安装都几乎必然
+# 死在某个大文件半路——用户看到的就是「后面下载大文件时提前提示下载完成」。
+FETCH_ATTEMPTS = 3
+FETCH_BACKOFF = 0.5
 
 
 class RangeError(RuntimeError):
@@ -206,6 +215,21 @@ class HttpVolume:
             return b""
         if self.limiter is not None:
             self.limiter.wait(n)
+
+        for attempt in range(1, FETCH_ATTEMPTS + 1):
+            try:
+                return self._fetch_once(offset, end)
+            except (OSError, http.client.HTTPException):
+                # 连接被重置、TLS 握手中途被掐、代理断流、响应提前收流……
+                # 这些都会自愈，隔一会儿原样重发即可。最后一次仍然失败才往
+                # 外抛，让安装如实记下这个文件失败。
+                if attempt >= FETCH_ATTEMPTS:
+                    raise
+                time.sleep(FETCH_BACKOFF * attempt)
+        raise AssertionError("不可能到这里")  # pragma: no cover
+
+    def _fetch_once(self, offset: int, end: int) -> bytes:
+        want = end - offset + 1
         req = urllib.request.Request(
             self.url,
             headers={"User-Agent": USER_AGENT, "Range": f"bytes={offset}-{end}"},
@@ -214,16 +238,20 @@ class HttpVolume:
             status = getattr(resp, "status", None)
             data = resp.read()
 
-        whole_file_ok = offset == 0 and n >= self.size
+        whole_file_ok = offset == 0 and want >= self.size
         if status not in (None, 206) and not whole_file_ok:
             raise RangeError(
                 f"卷 {self.index:03d} 对 Range bytes={offset}-{end} 返回了 {status}"
                 f"（期望 206）。CDN 可能已不支持范围请求。"
             )
-        if len(data) > n and not whole_file_ok:
+        if len(data) > want and not whole_file_ok:
             raise RangeError(
-                f"卷 {self.index:03d} 期望 {n} 字节却收到 {len(data)} 字节"
+                f"卷 {self.index:03d} 期望 {want} 字节却收到 {len(data)} 字节"
             )
+        if len(data) < want:
+            # 头部承诺的长度没兑现：算传输层抖动，值得重试（否则这个短块会
+            # 一直留在缓存里，让后面每一次读都重新发一遍请求）。
+            raise http.client.IncompleteRead(data, want - len(data))
 
         with self._lock:
             self.bytes += len(data)

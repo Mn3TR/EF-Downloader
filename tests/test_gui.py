@@ -7,7 +7,11 @@
 
 from __future__ import annotations
 
+import shutil
+import tempfile
 import unittest
+from pathlib import Path
+from unittest import mock
 
 
 def _display_available() -> str | None:
@@ -298,6 +302,104 @@ class TestCheckUnlocksInstall(unittest.TestCase):
 
         self.assertEqual(state(self.app.btn_check), "disabled")
         self.assertEqual(state(self.app.btn_stop), "normal")
+
+
+@unittest.skipIf(_REASON is not None, _REASON or "")
+class TestFinishTellsTheTruth(unittest.TestCase):
+    """收尾时必须如实报告「装完了」还是「中途断了」。
+
+    v0.2.3 之前这里有个 bug：``install()`` 在第一个失败处就提前返回
+    （GUI 从不传 ``keep_going``），剩下的文件一个没碰，而 ``_finish`` 只看
+    ``result.errors`` 有没有内容来决定**日志文案**，进度条和弹窗却是无条件
+    的「100% + 安装完成」。于是网络抖一下——实测 400 次 Range 请求里就有
+    1 次 TLS 断流——界面就宣称装完了，用户以为好了，其实一个大文件都没装成。
+
+    这组测试只管一件事：**有错的时候绝不能说完成。**
+    """
+
+    def setUp(self):
+        from efd import gui
+        from efd.gui import App
+
+        fixtures = Path(__file__).resolve().parent.parent / "data" / "fixtures"
+        if not (fixtures / "vol054.bin").exists():
+            self.skipTest("缺少离线夹具")
+
+        from efd.archive import load_pack_sizes, open_local
+        from efd.planner import make_plan
+
+        archive = open_local(
+            str(fixtures), load_pack_sizes(str(fixtures / "pack_sizes.json"))
+        )
+        self.addCleanup(archive.close)
+        self.app = App()
+        self.addCleanup(self.app.destroy)
+        self.plan = make_plan(archive, tempfile.mkdtemp(prefix="efd_gui_fin_"))
+        self.addCleanup(shutil.rmtree, self.plan.target, ignore_errors=True)
+        self.assertGreater(self.plan.need_count, 0, "夹具里没有待装文件")
+
+        self.info: list[tuple] = []
+        self.warn: list[tuple] = []
+        for name, sink in (("showinfo", self.info), ("showwarning", self.warn),
+                           ("showerror", self.warn)):
+            p = mock.patch.object(gui.messagebox, name,
+                                  side_effect=lambda *a, _s=sink, **k: _s.append(a))
+            p.start()
+            self.addCleanup(p.stop)
+
+    def result(self, **kw):
+        from efd.installer import Result
+
+        base = dict(done=0, written=0, net_bytes=0, elapsed=1.0, errors=[])
+        base.update(kw)
+        return Result(**base)
+
+    def test_a_failed_run_never_claims_success(self):
+        self.app._finish(
+            self.result(errors=["Endfield_Data/x/y.chk: <urlopen error EOF>"]),
+            self.plan, stopped=False,
+        )
+        self.assertEqual(self.info, [], "有错误还弹了「安装完成」")
+        self.assertEqual(len(self.warn), 1, "有错误必须弹一个「未完成」的警告")
+        self.assertEqual(self.warn[0][0], "未完成")
+        self.assertIn("没装", str(self.warn[0][1]), "没告诉用户还剩多少没装")
+
+    def test_a_failed_run_does_not_paint_a_full_bar(self):
+        """进度条画到 100% 就是那句谎话的源头，用户 основном看的就是它。"""
+        plan = self.plan
+        self.app._finish(
+            self.result(done=7, errors=["boom"]), plan, stopped=False,
+        )
+        self.assertLess(int(self.app.bar["value"]), 1000, "失败了还画满进度条")
+        self.assertNotEqual(self.app.lbl_pct.cget("text"), "100.0%")
+        self.assertIn("7", self.app.lbl_stats.cget("text"))
+        self.assertIn(str(plan.need_count), self.app.lbl_stats.cget("text"))
+
+    def test_a_failed_run_surfaces_the_error_text_in_the_log(self):
+        self.app._finish(
+            self.result(errors=["卷 013 对 Range bytes=0-1023 返回了 502（期望 206）。"]),
+            self.plan, stopped=False,
+        )
+        text = self.app.txt_log.get("1.0", "end")
+        self.assertIn("502", text, "错误详情没进日志")
+        self.assertNotIn("✅", text, "又打了那个成功对勾")
+
+    def test_a_clean_run_still_says_complete(self):
+        """另一半：真的装完了必须照常报完成，别矫枉过正。"""
+        self.app._finish(self.result(done=3, written=1234), self.plan, stopped=False)
+        self.assertEqual(int(self.app.bar["value"]), 1000)
+        self.assertEqual(self.app.lbl_pct.cget("text"), "100.0%")
+        self.assertEqual(self.warn, [], "干净跑完不该弹警告")
+        self.assertEqual(len(self.info), 1)
+        self.assertIn("安装完成", str(self.info[0][1]))
+
+    def test_a_stop_is_not_reported_as_either(self):
+        """停止是用户自己的选择，既不是完成也不是失败。"""
+        self.app._finish(self.result(done=2, written=99, stopped=True),
+                         self.plan, stopped=True)
+        self.assertEqual(self.info, [])
+        self.assertEqual(self.warn, [])
+        self.assertIn("已停止", self.app.lbl_state.cget("text"))
 
 
 if __name__ == "__main__":

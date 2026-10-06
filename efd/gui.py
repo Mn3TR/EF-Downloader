@@ -586,15 +586,33 @@ class App(tk.Tk):
             self.log(f"⏹ 已停止（本次写出 {human(result.written)}，{result.done} 个文件）。"
                      f"重新点【开始安装】会自动续传。")
             return
-        self.bar["value"] = 1000
-        self.lbl_pct.configure(text="100.0%")
+        # 出错时 install() 会在第一个失败处提前返回（GUI 从不传 keep_going），
+        # 剩下的文件根本没碰。这种情况下画到 100% 并弹「安装完成」就是在撒谎——
+        # 用户会以为装完了，实际上一个大文件都没装成。
         if result.errors:
-            self.set_state(f"完成，但有 {len(result.errors)} 个失败")
-            self.log(f"⚠ 完成但有 {len(result.errors)} 个失败，重新点【开始安装】会重试。")
+            total = max(1, plan.need_count)
+            pct = max(0.0, min(1.0, result.done / total))
+            self.bar["value"] = int(pct * 1000)
+            self.lbl_pct.configure(text=f"{pct * 100:.1f}%")
+            self.set_state(f"中断，{len(result.errors)} 个错误")
+            self.log(f"⚠ 安装中断：{result.done}/{plan.need_count} 个文件已完成，"
+                     f"之后没有再继续（本次共 {len(result.errors)} 个错误）。")
             for message in result.errors[:10]:
                 self.log("   " + message)
-        else:
-            self.set_state("完成")
+            self.lbl_stats.configure(
+                text=f"中断：{result.done}/{plan.need_count} 个文件 / {human(result.written)}")
+            messagebox.showwarning(
+                "未完成",
+                f"安装中断，还有 {plan.need_count - result.done} 个文件没装。\n\n"
+                f"错误 {len(result.errors)} 个（首个：{result.errors[0][:200]}）\n\n"
+                f"已完成 {result.done} 个文件 / 写出 {human(result.written)}\n"
+                f"下载 {human(result.net_bytes)}\n耗时 {human_time(result.elapsed)}\n\n"
+                f"重新点【开始安装】会接着装，已装好的会跳过。",
+            )
+            return
+        self.bar["value"] = 1000
+        self.lbl_pct.configure(text="100.0%")
+        self.set_state("完成")
         self.log(f"✅ 完成：{result.done} 个文件，写出 {human(result.written)}，"
                  f"下载 {human(result.net_bytes)}，耗时 {human_time(result.elapsed)}")
         self.lbl_stats.configure(text=f"完成：{result.done} 个文件 / {human(result.written)}")

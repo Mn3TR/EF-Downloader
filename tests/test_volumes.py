@@ -5,10 +5,13 @@
 
 from __future__ import annotations
 
+import http.client
 import io
+import ssl
 import threading
 import time
 import unittest
+import urllib.error
 from unittest import mock
 
 from efd.volumes import (
@@ -16,6 +19,7 @@ from efd.volumes import (
     HttpVolume,
     MissingVolume,
     Prefetcher,
+    RangeError,
     open_stream,
 )
 
@@ -352,6 +356,94 @@ class FakeResponse:
 
     def __exit__(self, *exc):
         return False
+
+
+class TestFetchRetry(unittest.TestCase):
+    """传输层抖动必须自愈。
+
+    现场实测：400 次真实 Range 请求里就有 1 次
+    ``URLError: [SSL: UNEXPECTED_EOF_WHILE_READING]``（0.25%）。一个 1.1 GiB
+    的大文件要上千次请求，不重试的话几乎必然死在半路——而 0.2.3 之前的表现
+    不是「报错」，是 GUI **弹「安装完成」并画到 100%**，所以这组测试盯的是
+    「抖动之后还能不能把文件老老实实读完」。
+    """
+
+    def setUp(self):
+        self.calls: list[tuple[int, int]] = []
+        self.body = bytes(range(256)) * 2
+        self.fail_times = 0
+        self.error: BaseException | None = None
+        self.short_by = 0
+
+        def fake_urlopen(req, timeout=None):
+            rng = req.get_header("Range")
+            start, end = (int(x) for x in rng.removeprefix("bytes=").split("-"))
+            self.calls.append((start, end))
+            if len(self.calls) <= self.fail_times:
+                raise self.error
+            body = self.body[start : end + 1]
+            if self.short_by:
+                body = body[: max(0, len(body) - self.short_by)]
+            return FakeResponse(body)
+
+        patcher = mock.patch("efd.volumes.urllib.request.urlopen", fake_urlopen)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        # 退避只为线上省事，测试里别真的睡。
+        backoff = mock.patch("efd.volumes.FETCH_BACKOFF", 0.0)
+        backoff.start()
+        self.addCleanup(backoff.stop)
+
+    def volume(self, size: int = 32, **kw):
+        vol = HttpVolume(0, "http://fake/vol", size, block=16,
+                         cache_blocks=kw.pop("cache_blocks", 8), **kw)
+        self.addCleanup(vol.close)
+        return vol
+
+    def test_transient_ssl_eof_is_retried_and_the_read_succeeds(self):
+        self.fail_times = 1
+        self.error = urllib.error.URLError(
+            ssl.SSLEOFError(8, "EOF occurred in violation of protocol"))
+        vol = self.volume()
+        self.assertEqual(vol.read_at(0, 16), self.body[:16])
+        self.assertEqual(len(self.calls), 2, "抖动之后没有原样重发")
+
+    def test_every_fetch_attempt_is_bounded(self):
+        """一直失败时必须如实抛出去，不能无限重试把安装挂死。"""
+        from efd.volumes import FETCH_ATTEMPTS
+
+        self.fail_times = 99
+        self.error = ConnectionResetError("connection reset by peer")
+        vol = self.volume()
+        with self.assertRaises(OSError):
+            vol.read_at(0, 16)
+        self.assertEqual(len(self.calls), FETCH_ATTEMPTS)
+
+    def test_short_read_is_treated_as_jitter(self):
+        """头部承诺的长度没兑现：重发，而不是把短块塞进缓存。"""
+        self.short_by = 4
+        vol = self.volume()
+        with self.assertRaises(http.client.IncompleteRead):
+            vol.read_at(0, 16)
+        self.assertEqual(len(self.calls), 3)
+
+    def test_a_bad_status_is_not_retried(self):
+        """服务器不认 Range（回 200）是配置问题，重试三遍只是浪费流量。"""
+        self.fail_times = 99
+        self.error = RangeError("卷 000 对 Range 返回了 200（期望 206）")
+        vol = self.volume()
+        with self.assertRaises(RangeError):
+            vol.read_at(0, 16)
+        self.assertEqual(len(self.calls), 1)
+
+    def test_retries_do_not_double_count_the_download(self):
+        """重试期间的失败请求不该计进流量，否则「下载量」会虚高。"""
+        self.fail_times = 2
+        self.error = urllib.error.URLError("temporary failure in name resolution")
+        vol = self.volume()
+        vol.read_at(0, 16)
+        self.assertEqual(vol.requests, 1)
+        self.assertEqual(vol.bytes, 16)
 
 
 if __name__ == "__main__":

@@ -330,6 +330,7 @@ VFS 块
 EFD(EFDownloader)/
 ├── README.md
 ├── LICENSE                  MIT
+├── ico.png                  图标源图（1254×1254，字标为白字暗底）
 ├── pyproject.toml
 ├── run-gui.cmd              双击从源码启动 GUI
 ├── build.cmd                双击构建单文件 exe
@@ -355,7 +356,7 @@ EFD(EFDownloader)/
 │   └── evidence/            取证样本（见该目录 README）
 └── tools/
     ├── build_exe.py         构建单文件 exe（含冒烟测试）
-    ├── make_icon.py         生成 packaging/efd.ico（手写 ICO，无 Pillow）
+    ├── make_icon.py         从 ico.png 生成 packaging/efd.ico（手写 ICO，无 Pillow）
     └── export_manifest.py   从夹具重建清单 CSV
 ```
 

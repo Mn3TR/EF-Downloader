@@ -162,6 +162,7 @@ efd/
 
 packaging/         PyInstaller 入口、spec、图标
 tools/             build_exe.py（构建 exe）、make_icon.py、export_manifest.py
+ico.png            图标源图，make_icon.py 从它生成 packaging/efd.ico
 build.cmd          双击构建 exe
 run-gui.cmd        双击从源码启动图形界面
 LICENSE            MIT

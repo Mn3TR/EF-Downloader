@@ -17,6 +17,19 @@
 
 ---
 
+## 下载
+
+**[⬇ 下载 EFD.exe](https://github.com/Mn3TR/EF-Downloader/releases/latest/download/EFD.exe)**
+单文件，目标机器**不需要装 Python**（Windows 10/11 x64）。
+
+> 这个 exe **没有代码签名**，所以会看到两件事：
+> **SmartScreen 会拦一下**（「未知发布者」→ 点「更多信息」→「仍要运行」），
+> **杀软可能误报**（PyInstaller 打包的常见现象，是误报）。
+> 校验用的 SHA256 写在每次的 [Release 说明](https://github.com/Mn3TR/EF-Downloader/releases/latest) 里。
+> 不放心就从下面的源码方式跑，**功能完全一致**。
+
+---
+
 ## 快速开始
 
 需要 **Python 3.10+**（自带 tkinter 即可，无需 `pip install` 任何东西）。

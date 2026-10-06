@@ -25,6 +25,48 @@ if ROOT not in sys.path:
 
 from efd import __version__  # noqa: E402
 
+ICON = os.path.join(ROOT, "packaging", "efd.ico")
+
+
+def _version_tuple(text: str) -> tuple:
+    """'0.1.0' -> (0, 1, 0, 0)。Windows 版本资源要求四段数字。"""
+    parts = []
+    for chunk in text.split(".")[:4]:
+        digits = "".join(c for c in chunk if c.isdigit())
+        parts.append(int(digits) if digits else 0)
+    return tuple(parts + [0] * (4 - len(parts)))
+
+
+# exe 的「右键属性 → 详细信息」内容。版本号**只从 efd.__version__ 来**，
+# 这个文件是生成物，不新增第二处真相。
+# 没有它的话属性面板一片空白，看起来像来路不明的程序，部分杀软启发式也吃这一套。
+VERSION_FILE = os.path.join(ROOT, "build", "version_info.txt")
+os.makedirs(os.path.dirname(VERSION_FILE), exist_ok=True)
+_V = _version_tuple(__version__)
+with open(VERSION_FILE, "w", encoding="utf-8") as _f:
+    _f.write(f"""VSVersionInfo(
+  ffi=FixedFileInfo(
+    filevers={_V}, prodvers={_V},
+    mask=0x3f, flags=0x0, OS=0x40004, fileType=0x1, subtype=0x0, date=(0, 0)
+  ),
+  kids=[
+    StringFileInfo([
+      StringTable('080404B0', [
+        StringStruct('CompanyName', 'Mn3TR'),
+        StringStruct('FileDescription', '终末地省空间安装器'),
+        StringStruct('FileVersion', '{__version__}'),
+        StringStruct('InternalName', 'EFD'),
+        StringStruct('LegalCopyright', 'Copyright (c) 2026 Mn3TR. MIT License.'),
+        StringStruct('OriginalFilename', 'EFD.exe'),
+        StringStruct('ProductName', 'EFD'),
+        StringStruct('ProductVersion', '{__version__}')
+      ])
+    ]),
+    VarFileInfo([VarStruct('Translation', [2052, 1200])])
+  ]
+)
+""")
+
 # 运行时用不到，剔掉能明显减小体积。
 EXCLUDES = [
     "unittest", "doctest", "pydoc", "pdb", "lib2to3", "distutils",
@@ -68,4 +110,6 @@ exe = EXE(  # noqa: F821
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon=ICON,
+    version=VERSION_FILE,
 )

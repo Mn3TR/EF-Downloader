@@ -51,10 +51,16 @@ class TestWindowConstruction(unittest.TestCase):
         self.assertEqual(state(self.app.btn_check), "normal")
         self.assertEqual(state(self.app.btn_stop), "disabled")
 
-    def test_default_target_is_populated(self):
-        from efd.gui import DEFAULT_TARGET
+    def test_target_comes_from_detection(self):
+        """默认值必须来自探测，不能是写死的开发者路径。"""
+        from efd import detect
 
-        self.assertEqual(self.app.var_target.get(), DEFAULT_TARGET)
+        self.assertEqual(self.app.var_target.get(), detect.suggest_target())
+
+    def test_target_is_never_a_hardcoded_dev_path(self):
+        from efd import gui
+
+        self.assertEqual(gui.DEFAULT_TARGET, "")
 
     def test_layout_runs(self):
         """触发一次布局与定时回调。"""
@@ -104,10 +110,18 @@ class TestPlanRendering(unittest.TestCase):
         self.app = App()
         self.addCleanup(self.app.destroy)
 
+        # 明确用一个临时目录当目标，不要依赖界面上预填的值
+        # （探测失败时它是空串，空串会被 abspath 成当前目录）。
+        import shutil
+        import tempfile
+
+        self.target = tempfile.mkdtemp(prefix="efd_gui_")
+        self.addCleanup(shutil.rmtree, self.target, ignore_errors=True)
+
     def test_show_plan_renders_numbers(self):
         from efd.planner import make_plan
 
-        plan = make_plan(self.archive, str(self.app.var_target.get()))
+        plan = make_plan(self.archive, self.target)
         self.app._show_plan(plan)
 
         text = self.app.txt_plan.get("1.0", "end")

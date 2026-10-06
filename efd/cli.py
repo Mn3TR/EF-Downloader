@@ -14,7 +14,7 @@ import sys
 import zipfile
 from collections import defaultdict
 
-from . import __version__, config
+from . import __version__, config, detect
 from .archive import Archive, open_remote
 from .installer import install
 from .planner import make_plan
@@ -31,7 +31,8 @@ EXIT_PARTIAL = 2
 
 
 def _add_scope_args(ap: argparse.ArgumentParser) -> None:
-    ap.add_argument("--target", required=True, metavar="DIR", help="游戏安装根目录")
+    ap.add_argument("--target", metavar="DIR",
+                    help="游戏安装根目录（省略时自动探测，探测失败会报错）")
     ap.add_argument("--exclude", default="", metavar="P1,P2",
                     help="跳过的路径前缀，逗号分隔（默认不跳过任何东西）")
     ap.add_argument("--exclude-ace", action="store_true",
@@ -55,6 +56,26 @@ def _resolve_excludes(args) -> tuple[str, ...]:
     if args.exclude_streaming:
         prefixes.extend(config.EXCLUDE_STREAMING)
     return tuple(prefixes)
+
+
+def _resolve_target(args) -> str:
+    """确定安装目录：显式给的优先，否则自动探测。
+
+    在**打开归档之前**调用——目标定不下来就没必要先花十秒去拉清单。
+
+    刻意不做「探测不到就用当前目录」这种兜底：这是个会往盘里写 58 GB 的
+    工具，宁可报错让人显式指定，也不能猜。
+    """
+    if args.target:
+        return args.target
+    found = detect.suggest_target()
+    if found:
+        print(f"未指定 --target，自动探测到：{found}")
+        return found
+    raise SystemExit(
+        "找不到游戏目录。请显式指定，例如：\n"
+        '    --target "D:\\Apps\\Hypergryph Launcher\\games\\Arknights Endfield"'
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -132,6 +153,7 @@ def _print_distribution(archive: Archive) -> None:
 
 
 def _print_plan(plan) -> None:
+    print(f"目标目录            = {plan.target}")
     print(f"已存在跳过          = {plan.already_count} 个  {human(plan.already_bytes)}")
     if plan.excluded:
         print(f"排除                = {len(plan.excluded)} 个  "
@@ -157,13 +179,14 @@ def _print_plan(plan) -> None:
 
 
 def cmd_plan(args) -> int:
+    target = _resolve_target(args)
     with open_remote(block=args.block) as archive:
         if not args.quiet:
             _print_header(archive)
             _print_distribution(archive)
         plan = make_plan(
             archive,
-            args.target,
+            target,
             exclude_prefixes=_resolve_excludes(args),
             verify_crc=args.verify_crc,
             force=args.force,
@@ -184,10 +207,11 @@ def cmd_plan(args) -> int:
 
 
 def cmd_install(args) -> int:
+    target = _resolve_target(args)
     with open_remote(block=args.block) as archive:
         plan = make_plan(
             archive,
-            args.target,
+            target,
             exclude_prefixes=_resolve_excludes(args),
             verify_crc=args.verify_crc,
             force=args.force,

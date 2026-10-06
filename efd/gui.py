@@ -21,15 +21,19 @@ import tkinter as tk
 import traceback
 from tkinter import filedialog, messagebox, ttk
 
-from . import config
+from . import config, detect
 from .archive import Archive, open_remote
 from .installer import Progress, Result, install
 from .planner import Plan, make_plan
 from .util import free_bytes, human, human_time
 
 APP_TITLE = "终末地 · 省空间安装器"
-DEFAULT_TARGET = r"D:\Apps\Hypergryph Launcher\games\Arknights Endfield"
 POLL_MS = 120
+
+# 刻意**不再写死**成开发者自己的路径——那对别人毫无意义，只会让人怀疑
+# 「这不是给我的东西」。默认值由 efd.detect 从注册表里推断；推断不出来
+# 就留空，界面上提示用户自己选。
+DEFAULT_TARGET = ""
 
 
 class Worker(threading.Thread):
@@ -131,7 +135,7 @@ class App(tk.Tk):
 
         top = ttk.LabelFrame(self, text="安装目录")
         top.pack(fill="x", **pad)
-        self.var_target = tk.StringVar(value=DEFAULT_TARGET)
+        self.var_target = tk.StringVar(value=detect.suggest_target() or DEFAULT_TARGET)
         row = ttk.Frame(top)
         row.pack(fill="x", padx=8, pady=8)
         ttk.Entry(row, textvariable=self.var_target).pack(side="left", fill="x", expand=True)
@@ -177,7 +181,10 @@ class App(tk.Tk):
         scroll.pack(side="right", fill="y")
         self.txt_log.pack(fill="both", expand=True, padx=(8, 0), pady=6)
 
-        self.log(f"{APP_TITLE} 就绪。确认目标目录后点【1. 检查】。")
+        if self.var_target.get():
+            self.log(f"{APP_TITLE} 就绪。已自动找到游戏目录，确认后点【1. 检查】。")
+        else:
+            self.log(f"{APP_TITLE} 就绪。没能自动找到游戏目录，请先点【浏览…】选择安装位置。")
 
     # -------- 小工具
     def log(self, msg: str) -> None:

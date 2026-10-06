@@ -10,12 +10,13 @@ dynamic = ["version"]
 description = "《明日方舟：终末地》省空间下载器 —— 流式解包，压缩包从不落盘"
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "Proprietary" }
+license = { text = "MIT" }
 keywords = ["arknights-endfield", "downloader", "zip", "streaming"]
 classifiers = [
     "Environment :: Console",
     "Environment :: Win32 (MS Windows)",
     "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
     "Operating System :: Microsoft :: Windows",
     "Programming Language :: Python :: 3",
     "Topic :: Games/Entertainment",
@@ -33,6 +34,7 @@ efd-gui = "efd.gui:main"
 
 [tool.setuptools]
 packages = ["efd"]
+license-files = ["LICENSE"]
 
 [tool.setuptools.dynamic]
 version = { attr = "efd.__version__" }

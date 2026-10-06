@@ -10,6 +10,7 @@
 *.blc binary
 *.exe binary
 *.dll binary
+*.ico binary
 
 # 派生的清单 CSV 用 LF，便于 diff。
 *.csv text eol=lf

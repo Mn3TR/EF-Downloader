@@ -15,6 +15,7 @@ import sys
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -71,9 +72,14 @@ class TestParsing(unittest.TestCase):
         self.assertEqual(args.command, "gui")
         self.assertFalse(hasattr(args, "target"))
 
-    def test_target_is_required(self):
-        with self.assertRaises(SystemExit), redirect_stderr(io.StringIO()):
-            self.parser.parse_args(["plan"])
+    def test_target_is_optional_at_parse_time(self):
+        """``--target`` 不再是 argparse 层面的必填项。
+
+        「必须有个目标」这件事挪到了运行时（``cli._resolve_target``），
+        因为探测结果只有那时才知道。
+        """
+        args = self.parser.parse_args(["plan"])
+        self.assertIsNone(args.target)
 
     def test_command_is_required(self):
         with self.assertRaises(SystemExit), redirect_stderr(io.StringIO()):
@@ -150,6 +156,56 @@ class TestEntryPoints(unittest.TestCase):
         finally:
             efd.gui.main = original
         self.assertEqual(calls, [1], "gui 子命令没有调用 efd.gui.main")
+
+
+class TestResolveTarget(unittest.TestCase):
+    """目标目录的确定规则。
+
+    这是会往盘里写 58 GB 的参数，所以「探测不到时怎么办」必须钉死：
+    **报错，绝不猜**。
+    """
+
+    @staticmethod
+    def _args(target=None):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(target=target)
+
+    def test_explicit_target_wins(self):
+        from efd.cli import _resolve_target
+
+        self.assertEqual(_resolve_target(self._args("X:/y")), "X:/y")
+
+    def test_falls_back_to_detection(self):
+        from efd import cli, detect
+
+        with mock.patch.object(detect, "suggest_target", return_value="D:/found"):
+            with redirect_stdout(io.StringIO()) as buf:
+                self.assertEqual(cli._resolve_target(self._args()), "D:/found")
+        self.assertIn("自动探测到", buf.getvalue())
+
+    def test_explicit_target_does_not_trigger_detection(self):
+        from efd import cli, detect
+
+        with mock.patch.object(detect, "suggest_target") as spy:
+            cli._resolve_target(self._args("X:/y"))
+        spy.assert_not_called()
+
+    def test_errors_when_nothing_found(self):
+        from efd import cli, detect
+
+        with mock.patch.object(detect, "suggest_target", return_value=""):
+            with self.assertRaises(SystemExit) as ctx:
+                cli._resolve_target(self._args())
+        self.assertIn("--target", str(ctx.exception))
+
+    def test_never_falls_back_to_cwd(self):
+        """兜底成当前目录是最危险的做法——那会把 58 GB 写进随便什么地方。"""
+        from efd import cli, detect
+
+        with mock.patch.object(detect, "suggest_target", return_value=""):
+            with self.assertRaises(SystemExit):
+                cli._resolve_target(self._args())
 
 
 class TestFrozenBehaviour(unittest.TestCase):

@@ -22,15 +22,19 @@
 需要 **Python 3.10+**（自带 tkinter 即可，无需 `pip install` 任何东西）。
 
 ```powershell
-# 图形界面（或直接双击 run-gui.cmd）
+# 图形界面（或直接双击 run-gui.cmd / dist\EFD.exe）
 python -m efd gui
 
 # 命令行：先看计划，不写任何文件
-python -m efd plan --target "D:\Apps\Hypergryph Launcher\games\Arknights Endfield"
+python -m efd plan
 
 # 确认无误后开装（不加 --apply 则永远只是预览）
-python -m efd install --target "D:\...\Arknights Endfield" --apply
+python -m efd install --apply
 ```
+
+**`--target` 可以省略。** 工具会从注册表里找鹰角启动器的安装位置，
+再扫 `<启动器>\games\*` 认 `Endfield.exe` / `Endfield_Data`，自动定位游戏目录。
+探测不到就**报错让你显式指定**，绝不会猜一个路径——毕竟这是要往盘里写 58 GB 的操作。
 
 跑到一半断了？**直接重跑**。已装好的文件按「存在且尺寸相同」跳过，
 不产生任何网络请求，续传是零成本的。
@@ -73,7 +77,7 @@ python tools/build_exe.py --setup       # 一次性：建构建 venv
 python tools/build_exe.py --clean --verify
 ```
 
-产物 **`dist/EFD.exe`，12.9 MiB**。三种用法共用同一个文件：
+产物 **`dist/EFD.exe`，13.2 MiB**。三种用法共用同一个文件：
 
 | 怎么用 | 结果 |
 |---|---|
@@ -147,6 +151,7 @@ flowchart LR
 efd/
 ├── config.py      常量与接口参数（改接口先看这里）
 ├── util.py        格式化、CRC32、路径越界防护、输出编码
+├── detect.py      从注册表定位游戏目录（默认值不写死）
 ├── seed.py        Seed 接口客户端
 ├── volumes.py     分卷 → 连续流（核心）
 ├── archive.py     ZIP 归档视图
@@ -155,12 +160,13 @@ efd/
 ├── cli.py         命令行
 └── gui.py         图形界面（Tkinter）
 
-packaging/         PyInstaller 入口与 spec
-tools/             build_exe.py（构建 exe）、export_manifest.py（重建清单）
+packaging/         PyInstaller 入口、spec、图标
+tools/             build_exe.py（构建 exe）、make_icon.py、export_manifest.py
 build.cmd          双击构建 exe
 run-gui.cmd        双击从源码启动图形界面
+LICENSE            MIT
 
-tests/             标准库 unittest，116 个用例，大部分不需要网络
+tests/             标准库 unittest，143 个用例，大部分不需要网络
 data/              派生物与离线夹具
 docs/              调查报告与取证样本
 
@@ -212,7 +218,20 @@ python tools/export_manifest.py             # 重建清单 CSV
 它没有破解、没有修改游戏内容、没有绕过任何付费或授权校验，但确实不是官方支持的安装方式。
 请自行判断是否接受，并自行承担风险。
 
-仓库目前**没有 LICENSE 文件** —— 这是有意留白的，需要作者明确选择。
+### 分发时要知道的事
+
+**MIT 许可**（见 [LICENSE](LICENSE)）覆盖的是**本仓库的代码**，不覆盖游戏本体或官方更新包。
+代码是 MIT，游戏内容不是你的，两者别混为一谈。
+
+把 exe 发给别人时，对方会碰到：
+
+* **SmartScreen 一定会拦。** exe 未做代码签名，从浏览器/聊天软件下载后双击会显示
+  「Windows 已保护你的电脑 · 未知发布者」，得点「更多信息 → 仍要运行」。
+  彻底解决要买代码签名证书，代码层面无解。
+* **部分杀软可能误报。** PyInstaller 的单文件 exe 是误报重灾区。
+  exe 已带完整版本资源（发布者、版本、版权、MIT 声明），能减轻但不能消除。
+* 如果对方**完全没装鹰角启动器**，这套文件能否独立启动游戏**未经验证**。
+  我们只验证过「启动器已装的前提下，它认账」。
 
 ---
 

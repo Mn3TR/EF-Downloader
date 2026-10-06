@@ -46,9 +46,25 @@ class _AppCase(unittest.TestCase):
     """建一个真窗口，并把它的弹窗全部收进列表里。"""
 
     def setUp(self):
+        from efd.core import settings
         from efd.ui import App
         from efd.ui import app as app_module
         from efd.ui import handlers
+
+        # 把偏好设置文件挪进临时目录。这些用例按的是真回调，而
+        # handlers.py 会顺手 settings.remember_*()——不隔离的话，
+        # 跑一次测试就把用户真实的 %LOCALAPPDATA%\EFD\settings.json
+        # 覆写成测试用的临时路径（曾经真的发生过）。
+        self.real_cfg = settings.config_path()
+        self.real_cfg_before = (self.real_cfg.read_bytes()
+                                if self.real_cfg.exists() else None)
+        self.cfg = Path(tempfile.mkdtemp(prefix="efd_cfg_"))
+        self.addCleanup(shutil.rmtree, self.cfg, ignore_errors=True)
+        cfg = mock.patch.object(settings, "config_path",
+                                lambda: self.cfg / "settings.json")
+        cfg.start()
+        self.addCleanup(cfg.stop)
+        self.addCleanup(self._assert_real_settings_untouched)
 
         self.app = App()
         self.addCleanup(self.app.destroy)
@@ -79,6 +95,16 @@ class _AppCase(unittest.TestCase):
             p = mock.patch.object(module, "askyesno", side_effect=answer)
             p.start()
             self.addCleanup(p.stop)
+
+    def _assert_real_settings_untouched(self) -> None:
+        """每条用例跑完都核对一遍真实的设置文件没被动过。
+
+        放在 addCleanup 里而不是单独一条用例里：漏写隔离的**新**用例
+        也会被抓住，而不是只有专门那条测试在管这件事。
+        """
+        after = (self.real_cfg.read_bytes() if self.real_cfg.exists() else None)
+        self.assertEqual(after, self.real_cfg_before,
+                         f"测试改写了真实的偏好设置文件 {self.real_cfg}")
 
     def target_dir(self) -> str:
         path = tempfile.mkdtemp(prefix="efd_ui_")
@@ -207,6 +233,25 @@ class TestStartActuallyStarts(_AppCase):
 
         self.assertEqual(settings.remembered_target(), self.app.var_target.get())
         self.assertEqual(settings.remembered_net(), ("3", "0"))
+
+    def test_starting_never_writes_outside_the_test_sandbox(self):
+        """跑测试不该动用户真实的偏好设置文件。
+
+        这条曾经真的发生过：``on_check()`` 按的是真回调，而
+        ``handlers.py`` 会顺手 ``settings.remember_*()``——于是跑一次
+        测试就把用户的 ``%LOCALAPPDATA%\\EFD\\settings.json``
+        覆写成测试用的临时路径，用户下次打开界面看到的是别人家的目录。
+        """
+        from efd.core import settings
+
+        self._patch_worker()
+        self.app.var_target.set(self.target_dir())
+        self.app.var_jobs.set("4")
+        self.app.on_check()
+
+        self.assertEqual(settings.config_path(), self.cfg / "settings.json")
+        self.assertTrue(settings.config_path().exists(),
+                        "隔离后的设置文件应当真的被写了，否则这条测试没在测东西")
 
     def test_install_warns_when_the_disk_is_too_small(self):
         """空间不够要问一句：这是"白下几十 G"和"提前退出"之间的区别。"""

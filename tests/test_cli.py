@@ -19,6 +19,7 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 
+from efd import __version__
 from efd.cli import build_parser, main
 
 SUBCOMMANDS = ("plan", "install", "probe", "gui")
@@ -300,7 +301,9 @@ class TestOutputEncoding(unittest.TestCase):
             capture_output=True, cwd=ROOT,
         )
         self.assertEqual(proc.returncode, 0)
-        self.assertEqual(proc.stdout.decode("utf-8").strip(), "efd 0.1.0")
+        # 跟着 __version__ 走，别把版本号在测试里再抄一份——那样每次发版
+        # 都得改测试，改漏了就是假失败。
+        self.assertEqual(proc.stdout.decode("utf-8").strip(), f"efd {__version__}")
 
     def test_errors_are_utf8_too(self):
         proc = subprocess.run(

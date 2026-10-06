@@ -182,5 +182,123 @@ class TestPlanRendering(unittest.TestCase):
         self.assertIn("y.bundle", self.app.lbl_cur.cget("text"))
 
 
+@unittest.skipIf(_REASON is not None, _REASON or "")
+class TestCheckUnlocksInstall(unittest.TestCase):
+    """检查跑完之后，【开始安装】必须能点。
+
+    v0.2.0 在这里有个 bug：检查分支发完计划就 ``return`` 了，没有任何一条
+    「结束」消息，按钮于是永远停在忙碌态，用户只能重启程序。
+
+    这里刻意把**真实的 Worker** 跑在离线夹具上，再用它**真实发出的消息序列**
+    去驱动界面——如果手写消息序列，那这个测试就跟 Worker 脱钩了，
+    以后 Worker 改坏它照样是绿的（当初就是这种测试放过了上面那个 bug）。
+    """
+
+    def setUp(self):
+        from efd.archive import load_pack_sizes, open_local
+        from efd.gui import App
+        from pathlib import Path
+        import shutil
+        import tempfile
+
+        fixtures = Path(__file__).resolve().parent.parent / "data" / "fixtures"
+        if not (fixtures / "vol054.bin").exists():
+            self.skipTest("缺少离线夹具")
+
+        self.archive = open_local(
+            str(fixtures), load_pack_sizes(str(fixtures / "pack_sizes.json"))
+        )
+        self.addCleanup(self.archive.close)
+        self.app = App()
+        self.addCleanup(self.app.destroy)
+        self.target = tempfile.mkdtemp(prefix="efd_gui_check_")
+        self.addCleanup(shutil.rmtree, self.target, ignore_errors=True)
+
+    def _run_a_real_check(self) -> list[tuple[str, dict]]:
+        """跑一次真的检查，返回 Worker 发出的消息。"""
+        from unittest import mock
+
+        from efd import gui
+
+        worker = gui.Worker(self.app.q, self.target, False, False)
+        with mock.patch.object(gui, "open_remote", return_value=self.archive):
+            worker.run()  # 同步跑：不需要真的起线程，消息照样进队列
+
+        messages = []
+        while True:
+            try:
+                messages.append(self.app.q.get_nowait())
+            except Exception:  # noqa: BLE001 - queue.Empty
+                break
+        return messages
+
+    def test_check_run_emits_a_terminal_message(self):
+        """检查这一轮必须以「结束」消息收尾，否则界面无从知道该解锁。"""
+        from efd.gui import TERMINAL_KINDS
+
+        messages = self._run_a_real_check()
+        kinds = [k for k, _ in messages]
+
+        errors = [p["text"] for k, p in messages if k == "error"]
+        self.assertEqual(errors, [], f"检查过程报错了：{errors}")
+        self.assertIn("plan", kinds, "没有把计划发回界面")
+        self.assertIn(kinds[-1], TERMINAL_KINDS,
+                      f"检查结束在 {kinds[-1]!r} 上，界面不会解锁（消息序列 {kinds}）")
+
+    def test_check_message_sequence_unlocks_install(self):
+        """把真实消息灌进真实的泵，【开始安装】必须解锁。
+
+        ``worker`` 置空是刻意的：这样兜底的 watchdog 不会介入，
+        解锁只能来自对结束消息的处理——测的正是当初漏掉的那条路径。
+        """
+        messages = self._run_a_real_check()
+
+        # 模拟 _start(do_install=False)：先锁上，再等消息
+        self.app.plan = None
+        self.app.worker = None
+        self.app._busy(True)
+        self.assertEqual(state(self.app.btn_go), "disabled")
+
+        for kind, payload in messages:
+            self.app._handle(kind, payload)
+
+        self.assertEqual(state(self.app.btn_check), "normal")
+        self.assertEqual(state(self.app.btn_go), "normal",
+                         "检查完成后【开始安装】仍然点不动")
+        self.assertEqual(state(self.app.btn_stop), "disabled")
+        self.assertTrue(self.app.plan is not None and self.app.plan.need_count > 0)
+
+    def test_watchdog_unlocks_buttons_after_a_silent_death(self):
+        """兜底：worker 悄悄死了、没发结束消息，界面也不能永远锁着。"""
+        import threading
+
+        dead = threading.Thread(target=lambda: None)
+        dead.start()
+        dead.join()
+        self.app.worker = dead
+        self.app._busy(True)
+
+        self.app._poll()
+
+        self.assertEqual(state(self.app.btn_check), "normal")
+        self.assertEqual(state(self.app.btn_go), "disabled", "没有计划时不该解锁安装")
+
+    def test_watchdog_leaves_a_live_worker_alone(self):
+        """worker 还在跑的时候，兜底不能手贱去解锁。"""
+        import threading
+
+        gate = threading.Event()
+        self.addCleanup(gate.set)
+        live = threading.Thread(target=gate.wait, daemon=True)
+        live.start()
+        self.app.worker = live
+        self.app._busy(True)
+
+        self.app._poll()
+
+        self.assertEqual(state(self.app.btn_check), "disabled")
+        self.assertEqual(state(self.app.btn_stop), "normal")
+
+
 if __name__ == "__main__":
     unittest.main()

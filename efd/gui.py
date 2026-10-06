@@ -38,6 +38,11 @@ POLL_MS = 120
 WINDOW = (980, 760)
 MIN_WINDOW = (880, 640)
 
+# 「这一轮结束了」的消息种类。收到其中任何一条，界面都必须解锁。
+# 集中列在这里是刻意的：v0.2.0 的检查流程漏了这件事，表现是检查跑完后
+# 【开始安装】永远点不动——用户没有任何办法自己诊断出来。
+TERMINAL_KINDS = frozenset({"checked", "done", "stopped", "error"})
+
 # 刻意**不再写死**成开发者自己的路径——那对别人毫无意义，只会让人怀疑
 # 「这不是给我的东西」。默认值由 efd.settings 决定：上次用过的 → 注册表探测 → 留空。
 DEFAULT_TARGET = ""
@@ -72,7 +77,7 @@ class Worker(threading.Thread):
                 plan = self._plan(archive)
                 self.say("plan", plan=plan)
                 if not self.do_install:
-                    self.say("status", text="检查完成。", state="检查完成")
+                    self.say("checked", plan=plan)
                     return
                 if not plan.need:
                     self.say("done", result=Result(), plan=plan)
@@ -107,6 +112,7 @@ class App(tk.Tk):
         self.plan: Plan | None = None
         self._closing = False
         self._detail_shown = False
+        self._busy_now = False
 
         # tkinter 回调里的异常默认会被静默吞掉，这里让它浮到日志窗。
         self.report_callback_exception = self._on_callback_error
@@ -406,6 +412,7 @@ class App(tk.Tk):
 
     # -------- 动作
     def _busy(self, on: bool) -> None:
+        self._busy_now = on
         self.btn_check.configure(state="disabled" if on else "normal")
         self.btn_go.configure(
             state="disabled" if on else ("normal" if self.plan and self.plan.need else "disabled")
@@ -470,6 +477,17 @@ class App(tk.Tk):
             self.btn_stop.configure(state="disabled")
 
     # -------- 消息泵
+    def _watchdog(self) -> None:
+        """兜底：worker 已经结束了，界面却还锁着，就解锁。
+
+        正常路径由 :data:`TERMINAL_KINDS` 负责。这条线是防止**将来**新增的
+        退出分支又忘了发结束消息——那种故障的表现是「按钮点不动」，
+        用户既看不懂也绕不过去，只能重启程序。
+        """
+        if self._busy_now and self.worker is not None and not self.worker.is_alive():
+            self.log("（后台任务已结束，恢复按钮）")
+            self._busy(False)
+
     def _poll(self) -> None:
         try:
             while True:
@@ -481,15 +499,24 @@ class App(tk.Tk):
         except queue.Empty:
             pass
         finally:
+            # 先把队列抽干再看 worker 死活：它的消息一定在它退出之前就发出去了，
+            # 所以「队列空 + 线程死」才等于这一轮真的处理完。
+            self._watchdog()
             # 无论如何都要续上，否则泵一死界面就再也不更新了。
             if not self._closing:
                 self.after(POLL_MS, self._poll)
 
     def _handle(self, kind: str, payload: dict) -> None:
+        if kind in TERMINAL_KINDS:
+            # 集中解锁：不管这一轮是怎么结束的，按钮都得还原。
+            # 「计划已到」不代表结束——检查流程还要再发一条 checked。
+            self._busy(False)
         if kind == "status":
             self.log(payload["text"])
             if payload.get("state"):
                 self.set_state(payload["state"])
+        elif kind == "checked":
+            self.log("检查完成。")
         elif kind == "plan":
             self._show_plan(payload["plan"])
         elif kind == "progress":
@@ -499,7 +526,6 @@ class App(tk.Tk):
         elif kind == "stopped":
             self._finish(payload["result"], payload["plan"], stopped=True)
         elif kind == "error":
-            self._busy(False)
             self.set_state("出错")
             self.log("❌ 出错：\n" + payload["text"])
             messagebox.showerror("出错", payload["text"][:1500])

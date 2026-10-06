@@ -207,6 +207,36 @@ class TestStop(InstallerCase):
         self.assertEqual(written, sorted(written), "文件内部的进度没有单调增长")
         self.assertGreater(written[-1], 0)
 
+    def test_speed_never_goes_negative_after_a_stop(self):
+        """中止后停在界面上的那一帧，速度不能是负的。
+
+        拷贝途中播报的是「已拷字节」，收尾那次按「已落盘字节」算；半截文件
+        一被丢弃，增量就成了负数。实测在真机界面上出现过 ``-9.18 GB/s``。
+        """
+        from unittest import mock
+
+        from efd import installer as inst
+
+        plan = self.make_limited_plan()
+        event = threading.Event()
+        seen = []
+
+        def on_progress(progress):
+            seen.append(progress)
+            if progress.done == 0:
+                event.set()
+
+        with mock.patch.object(inst, "COPY_CHUNK", 1 << 16):
+            result = install(self.archive, plan, on_progress=on_progress,
+                             stop_event=event, interval=0.0)
+
+        self.assertTrue(result.stopped)
+        self.assertTrue(seen, "进度回调从未被调用")
+        for p in seen:
+            self.assertGreaterEqual(p.speed, 0.0, f"出现负速度: {p.speed}")
+        # 最后一帧说的是「已落盘多少」，和中止摘要口径一致
+        self.assertEqual(seen[-1].written, result.written)
+
     def test_stop_midway_leaves_no_partial_file(self):
         plan = self.make_limited_plan()
         self.assertGreaterEqual(len(plan.need), 2)

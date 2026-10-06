@@ -111,7 +111,10 @@ def install(
         if written == emitted_written and result.done == emitted_done:
             return
         delta_t = max(now - last_t, 1e-9)
-        speed = (written - last_written) / delta_t
+        # 速度只能是正的：拷贝途中报的是「已拷字节」，收尾那次按「已落盘字节」
+        # 算，被中止的那半截一扣增量就成了负数——而停止之后停在界面上的
+        # 恰好就是这一帧，用户看到的是「-9.18 GB/s」这种东西。
+        speed = max(0.0, (written - last_written) / delta_t)
         last_t, last_written = now, written
         emitted_written, emitted_done = written, result.done
         if on_progress is None:

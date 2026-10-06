@@ -5,6 +5,7 @@ __pycache__/
 build/
 dist/
 .venv/
+.venv-build/
 venv/
 
 # --- 测试与工具的临时产物 ---

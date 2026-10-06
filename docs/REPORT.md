@@ -330,10 +330,11 @@ VFS 块
 EFD(EFDownloader)/
 ├── README.md
 ├── pyproject.toml
-├── run-gui.cmd              双击启动 GUI
+├── run-gui.cmd              双击从源码启动 GUI
+├── build.cmd                双击构建单文件 exe
 ├── efd/
 │   ├── config.py            常量与接口参数
-│   ├── util.py              格式化 / CRC32 / safe_join
+│   ├── util.py              格式化 / CRC32 / safe_join / 输出编码
 │   ├── seed.py              Seed 接口客户端
 │   ├── volumes.py           跨卷可寻址流（核心）
 │   ├── archive.py           ZIP 归档视图
@@ -341,7 +342,8 @@ EFD(EFDownloader)/
 │   ├── installer.py         安装循环（流式）
 │   ├── cli.py               命令行
 │   └── gui.py               图形界面（Tkinter）
-├── tests/                   109 个用例，标准库 unittest
+├── packaging/               PyInstaller 入口与 spec
+├── tests/                   116 个用例，标准库 unittest
 ├── data/
 │   ├── package_manifest.csv 1692 条清单（派生物）
 │   ├── hotfix_index_main.json / hotfix_index_initial.json
@@ -349,8 +351,21 @@ EFD(EFDownloader)/
 ├── docs/
 │   ├── REPORT.md            本文档
 │   └── evidence/            取证样本（见该目录 README）
-└── tools/export_manifest.py 从夹具重建清单 CSV
+└── tools/
+    ├── build_exe.py         构建单文件 exe（含冒烟测试）
+    └── export_manifest.py   从夹具重建清单 CSV
 ```
+
+### 分发形态
+
+| 形态 | 产物 | 目标机要求 |
+|---|---|---|
+| 单文件 exe | `dist/EFD.exe`（12.9 MiB） | **无需 Python**，双击即用 |
+| wheel | `efd-0.1.0-py3-none-any.whl`（33 KB） | Python 3.10+，`pip install efd` |
+| 源码 | 本仓库 | Python 3.10+，`python -m efd gui` |
+
+exe 是**一个文件同时承载 CLI 与 GUI**：双击（无参数）进图形界面，
+终端里可以正常跑 `EFD.exe plan …`，`EFD.exe gui` 会自动摘掉控制台窗口。
 
 ### 重构时删除的东西
 

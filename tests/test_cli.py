@@ -9,8 +9,14 @@ argparse 会把 help 字符串当 ``%`` 格式模板，一个没转义的百分�
 from __future__ import annotations
 
 import io
+import os
+import subprocess
+import sys
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
 
 from efd.cli import build_parser, main
 
@@ -144,6 +150,110 @@ class TestEntryPoints(unittest.TestCase):
         finally:
             efd.gui.main = original
         self.assertEqual(calls, [1], "gui 子命令没有调用 efd.gui.main")
+
+
+class TestFrozenBehaviour(unittest.TestCase):
+    """打包成 exe 后的行为。用 sys.frozen 模拟冻结态，不需要真的构建。"""
+
+    def setUp(self):
+        import efd.gui
+
+        self.gui = efd.gui
+        self.original_main = efd.gui.main
+        self.saved_argv = sys.argv
+
+    def tearDown(self):
+        self.gui.main = self.original_main
+        sys.argv = self.saved_argv
+        if hasattr(sys, "frozen"):
+            del sys.frozen
+
+    def test_frozen_no_args_defaults_to_gui(self):
+        """双击 exe 没有任何参数 —— 这是「双击」唯一合理的语义。"""
+        import efd.cli
+
+        calls = []
+        self.gui.main = lambda: calls.append(1)
+        sys.argv = ["EFD.exe"]
+        sys.frozen = True  # type: ignore[attr-defined]
+
+        self.assertEqual(efd.cli.main(), 0)
+        self.assertEqual(calls, [1])
+
+    def test_not_frozen_no_args_still_requires_subcommand(self):
+        """源码运行时行为不变：仍然报错要求子命令。"""
+        import efd.cli
+
+        sys.argv = []
+        with self.assertRaises(SystemExit) as ctx, redirect_stderr(io.StringIO()):
+            efd.cli.main()
+        self.assertNotEqual(ctx.exception.code, 0)
+
+    def test_frozen_with_args_does_not_force_gui(self):
+        """冻结态下带了参数就必须走正常解析，不能被改写成 gui。"""
+        import efd.cli
+
+        calls = []
+        self.gui.main = lambda: calls.append(1)
+        sys.argv = ["EFD.exe", "--version"]
+        sys.frozen = True  # type: ignore[attr-defined]
+
+        with self.assertRaises(SystemExit) as ctx, redirect_stdout(io.StringIO()):
+            efd.cli.main()
+        self.assertEqual(ctx.exception.code, 0)
+        self.assertEqual(calls, [], "带参数时不该进 GUI")
+
+
+class TestDetachConsole(unittest.TestCase):
+    def test_noop_when_not_frozen(self):
+        """源码运行时 detach_console 必须什么都不做。
+
+        真的 FreeConsole 会把这个测试进程从控制台摘下来，之后所有输出都看不见。
+        """
+        from efd.gui import detach_console
+
+        if hasattr(sys, "frozen"):
+            self.skipTest("当前进程已被冻结")
+        detach_console()  # 不抛异常即可
+        print("控制台仍然可用")
+
+
+class TestOutputEncoding(unittest.TestCase):
+    """管道/重定向场景必须写 UTF-8。
+
+    跑的是**真的子进程 + 真的管道**，所以能抓住「在控制台里看着正常、
+    一重定向就变成 U+FFFD」这类只在特定消费方那里才暴露的问题。
+    """
+
+    def test_piped_help_is_decodable_as_utf8(self):
+        if os.name != "nt":
+            self.skipTest("这套编码处理只针对 Windows")
+        proc = subprocess.run(
+            [sys.executable, "-m", "efd", "--help"],
+            capture_output=True, cwd=ROOT,
+        )
+        self.assertEqual(proc.returncode, 0)
+        text = proc.stdout.decode("utf-8")  # 不是 UTF-8 就会在这里炸
+        self.assertIn("省空间", text)
+        for name in SUBCOMMANDS:
+            self.assertIn(name, text)
+
+    def test_piped_version_is_utf8(self):
+        proc = subprocess.run(
+            [sys.executable, "-m", "efd", "--version"],
+            capture_output=True, cwd=ROOT,
+        )
+        self.assertEqual(proc.returncode, 0)
+        self.assertEqual(proc.stdout.decode("utf-8").strip(), "efd 0.1.0")
+
+    def test_errors_are_utf8_too(self):
+        proc = subprocess.run(
+            [sys.executable, "-m", "efd"],
+            capture_output=True, cwd=ROOT,
+        )
+        self.assertNotEqual(proc.returncode, 0)
+        # argparse 的用法提示里带中文（description），必须能按 UTF-8 解开
+        proc.stderr.decode("utf-8")
 
 
 if __name__ == "__main__":

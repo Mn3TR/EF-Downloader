@@ -19,7 +19,7 @@ from .archive import Archive, open_remote
 from .installer import install
 from .planner import make_plan
 from .seed import SeedError
-from .util import human, human_time
+from .util import human, human_time, setup_output_encoding
 from .volumes import RangeError
 
 EXIT_OK = 0
@@ -303,6 +303,13 @@ COMMANDS = {
 
 
 def main(argv: list[str] | None = None) -> int:
+    setup_output_encoding()
+    if argv is None:
+        argv = sys.argv[1:]
+        if not argv and getattr(sys, "frozen", False):
+            # 双击 exe 时没有任何参数，此时直接进图形界面——这是「双击」
+            # 这个动作唯一合理的语义。显式传入 argv（例如测试）不受影响。
+            argv = ["gui"]
     args = build_parser().parse_args(argv)
     try:
         return COMMANDS[args.command](args)

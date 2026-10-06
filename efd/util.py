@@ -4,9 +4,33 @@ from __future__ import annotations
 
 import os
 import shutil
+import sys
 import zlib
 
 CHUNK = 1 << 20
+
+
+def setup_output_encoding() -> None:
+    """让中文输出在各种消费方那里都稳定。
+
+    Windows 上 Python 在**管道/重定向**时用本地代码页（简中 = cp936），
+    而现代消费方（PowerShell 7、多数 IDE、CI）按 UTF-8 读，于是整段变成
+    ``U+FFFD`` 替换字符——实测 ``EFD.exe --help > out.txt`` 得到的文件里
+    没有一个可读汉字。
+
+    控制台场景**刻意不动**：那里 Python 跟随控制台代码页，本来就是对的
+    （cp936 控制台得到 cp936，UTF-8 控制台得到 UTF-8）。
+
+    CLI 与构建脚本都调用它，免得同一类问题各修一遍。
+    """
+    if os.name != "nt":
+        return
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            if not stream.isatty():
+                stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError, OSError):
+            pass
 
 
 class UnsafePathError(ValueError):
@@ -94,6 +118,7 @@ def free_bytes(path: str) -> int:
 __all__ = [
     "CHUNK",
     "UnsafePathError",
+    "setup_output_encoding",
     "human",
     "human_time",
     "crc32_file",

@@ -62,6 +62,44 @@ python -m efd install --target "D:\...\Arknights Endfield" --apply
 
 ---
 
+## 打包成单文件 exe
+
+目标机器**不需要装 Python**。
+
+```powershell
+build.cmd                              # 双击也行；首次会自动建 .venv-build/ 并装 PyInstaller
+# 等价于：
+python tools/build_exe.py --setup       # 一次性：建构建 venv
+python tools/build_exe.py --clean --verify
+```
+
+产物 **`dist/EFD.exe`，12.9 MiB**。三种用法共用同一个文件：
+
+| 怎么用 | 结果 |
+|---|---|
+| 双击 | 直接进图形界面 |
+| `EFD.exe plan --target "…"` | 正常命令行输出 |
+| `EFD.exe gui` | 图形界面，并自动摘掉控制台窗口 |
+
+之所以不用 PyInstaller 的 `--noconsole`：那会把 CLI 的输出一起干掉。控制台模式 +
+`FreeConsole()` 能同时满足两种用法，代价是**只需要一个文件**。
+
+`--verify` 会真的把 exe 跑起来做三项冒烟测试：`--version`、`--help` 里四个子命令齐全、
+无参数启动后窗口**真的出现**（用 `EnumWindows` 查，不是看进程活着）且关闭后无残留窗口。
+
+两个刻意的设计：
+
+* **不碰你的全局 Python。** 优先用仓库内的 `.venv-build/`，没有就提示 `--setup`。
+* **把 PyInstaller 的缓存挪出 C 盘。** 它默认写 `%LOCALAPPDATA%`；构建脚本改到 `build/` 下。
+
+### 单文件模式的代价
+
+onefile 每次启动都会先把自己解压到 `%TEMP%\`（约 13 MB），首次启动慢 1–2 秒。
+如果目标机器 C 盘很紧，把 spec 里的 `EXE(...)` 换成分目录模式（PyInstaller 的
+`--onedir`）可以避免这个解压。
+
+---
+
 ## 工作原理
 
 启动器的更新包是 **54 个分卷**，前 53 卷每卷恰好 1 GiB，末卷 6,706,365 B。
@@ -108,7 +146,7 @@ flowchart LR
 ```
 efd/
 ├── config.py      常量与接口参数（改接口先看这里）
-├── util.py        体积/时长格式化、CRC32、路径越界防护
+├── util.py        格式化、CRC32、路径越界防护、输出编码
 ├── seed.py        Seed 接口客户端
 ├── volumes.py     分卷 → 连续流（核心）
 ├── archive.py     ZIP 归档视图
@@ -117,10 +155,17 @@ efd/
 ├── cli.py         命令行
 └── gui.py         图形界面（Tkinter）
 
-tests/             标准库 unittest，109 个用例，大部分不需要网络
+packaging/         PyInstaller 入口与 spec
+tools/             build_exe.py（构建 exe）、export_manifest.py（重建清单）
+build.cmd          双击构建 exe
+run-gui.cmd        双击从源码启动图形界面
+
+tests/             标准库 unittest，116 个用例，大部分不需要网络
 data/              派生物与离线夹具
 docs/              调查报告与取证样本
-tools/             一次性工具
+
+build/ dist/       构建中间产物与 EFD.exe（已被 .gitignore 忽略）
+.venv-build/       构建用 venv，同样不入库
 ```
 
 **`planner.py` 和 `installer.py` 是 CLI 与 GUI 的唯一实现。** 两者都只负责
@@ -186,3 +231,7 @@ python -m efd plan --target . --limit 5     # 快速干跑
 4. **安装是流式的。** 不要退化成 `zf.read()` —— 最大单文件 1.50 GB，
    那会让内存峰值等于文件大小。
 5. **路径校验是显式拒绝，不是静默改写**（`util.safe_join`）。
+6. **管道输出统一 UTF-8**（`util.setup_output_encoding`）。
+   控制台跟随控制台代码页；管道/重定向写 UTF-8。
+   不这么做的话，PowerShell 7 / CI 读到的会是 cp936 字节，整段变成 `U+FFFD`。
+   这个坑咬过两次（CLI 一次、构建脚本一次），所以提成了共用函数。

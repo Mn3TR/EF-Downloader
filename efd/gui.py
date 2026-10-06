@@ -472,7 +472,7 @@ class App(tk.Tk):
     def on_stop(self) -> None:
         if self.worker and self.worker.is_alive():
             self.worker.stop_event.set()
-            self.log("已请求停止，等待当前文件写完…")
+            self.log("已请求停止，当前文件会中断并丢弃（下次从头下）。")
             self.set_state("正在停止…")
             self.btn_stop.configure(state="disabled")
 

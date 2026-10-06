@@ -152,14 +152,72 @@ class TestStop(InstallerCase):
         self.assertEqual(result.done, 0)
         self.assertEqual(list(Path(self.target).rglob("*")), [])
 
+    def test_stop_takes_effect_inside_the_current_file(self):
+        """停机必须在**当前文件内部**生效，不能等它写完。
+
+        只在文件与文件之间查一次 ``stop_event`` 的话，按了「停止」之后要等
+        整个文件下完才生效——而最大的单文件有 2 GB 以上，界面十几分钟没反应，
+        用户只会认为程序卡死了（然后去关窗口，留下一个巨大的 ``.part``）。
+        """
+        from unittest import mock
+
+        from efd import installer as inst
+
+        plan = self.make_limited_plan()
+        self.assertGreaterEqual(len(plan.need), 2)
+
+        event = threading.Event()
+
+        def on_progress(progress):
+            if progress.done == 0:  # 第一个文件还在拷，就喊停
+                event.set()
+
+        with mock.patch.object(inst, "COPY_CHUNK", 1 << 16):
+            result = install(self.archive, plan, on_progress=on_progress,
+                             stop_event=event, interval=0.0)
+
+        self.assertTrue(result.stopped)
+        self.assertEqual(result.done, 0, "半截文件不该被算作已完成")
+        self.assertEqual(result.written, 0)
+        # 半截文件必须删掉，绝不能 promote 成正式文件
+        self.assertEqual(list(Path(self.target).rglob("*.part")), [])
+        self.assertEqual([p for p in Path(self.target).rglob("*") if p.is_file()], [],
+                         "中止的那个文件不该在盘上留下任何东西")
+
+    def test_progress_advances_inside_a_single_file(self):
+        """大文件拷贝途中也要报进度，否则界面看起来是冻住的。
+
+        只在文件边界回调的话，一个 2 GB 的文件要下十几分钟，这期间进度条、
+        速度、当前文件名全都不动——用户没有任何办法判断它是不是还活着。
+        """
+        from unittest import mock
+
+        from efd import installer as inst
+
+        plan = self.make_limited_plan()
+        seen = []
+        with mock.patch.object(inst, "COPY_CHUNK", 1 << 16):
+            install(self.archive, plan, on_progress=seen.append, interval=0.0)
+
+        # done == 0 的那些回调，全都发生在第一个文件还没拷完的时候
+        mid_file = [p for p in seen if p.done == 0]
+        self.assertGreaterEqual(len(mid_file), 2,
+                                f"第一个文件内部只播报了 {len(mid_file)} 次进度")
+        written = [p.written for p in mid_file]
+        self.assertEqual(written, sorted(written), "文件内部的进度没有单调增长")
+        self.assertGreater(written[-1], 0)
+
     def test_stop_midway_leaves_no_partial_file(self):
         plan = self.make_limited_plan()
         self.assertGreaterEqual(len(plan.need), 2)
 
         event = threading.Event()
 
-        def on_progress(_progress):
-            event.set()  # 装完第一个文件就喊停
+        def on_progress(progress):
+            # 注意要等 done 涨到 1：拷贝途中也会回调，直接 set 的话
+            # 会变成「文件内部中止」，那是上面那个测试的事。
+            if progress.done >= 1:
+                event.set()
 
         result = install(self.archive, plan, on_progress=on_progress,
                          stop_event=event, interval=0.0)
@@ -171,6 +229,23 @@ class TestStop(InstallerCase):
         done_entry = plan.need[0]
         self.assertEqual(Path(safe_join(self.target, done_entry.name)).stat().st_size,
                          done_entry.size)
+
+    def test_orphan_part_from_a_killed_run_is_swept(self):
+        """上次被强杀留下的 ``.part`` 要清掉。
+
+        关窗口时 worker 是 daemon 线程，进程立刻退出，正在写的文件就留在盘上了。
+        我们从不续写半截文件，所以它只有占地方一个作用。
+        """
+        plan = self.make_limited_plan()
+        entry = plan.need[0]
+        orphan = Path(safe_join(self.target, entry.name) + ".part")
+        orphan.parent.mkdir(parents=True, exist_ok=True)
+        orphan.write_bytes(b"x" * 4096)
+
+        install(self.archive, plan)
+
+        self.assertFalse(orphan.exists(), "上一次残留的 .part 没有被清掉")
+        self.assertEqual(list(Path(self.target).rglob("*.part")), [])
 
 
 class TestFailureHandling(InstallerCase):

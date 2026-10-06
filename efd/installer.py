@@ -15,7 +15,7 @@ from typing import Callable
 
 from .archive import Archive
 from .planner import Plan
-from .util import safe_join
+from .util import UnsafePathError, safe_join
 
 COPY_CHUNK = 1 << 20
 
@@ -74,12 +74,16 @@ def install(
     """按计划安装。
 
     :param on_progress: 进度回调，约每 ``interval`` 秒一次，外加最后一次。
-    :param stop_event: 置位后在本文件写完时停机（不会留下半个文件）。
+        拷贝**途中**也会回调——只在文件边界回调的话，大文件写到一半时
+        进度条和速度是冻住的，用户分不清「在干活」和「卡死了」。
+    :param stop_event: 置位后在下一次读取前停机，最多再等一个 ``COPY_CHUNK``。
+        半截文件会被删除——每个文件都是从头下载的，留残片没有意义。
     :param keep_going: 单个文件失败时继续，而不是中断。
     :param prune: 装完后删除 ``plan.stale``（本地存在但清单里没有的多余文件）。
     """
     target = plan.target
     os.makedirs(target, exist_ok=True)
+    _sweep_parts(target, plan)
 
     result = Result()
     total = len(plan.need)
@@ -90,19 +94,26 @@ def install(
     emitted_written = emitted_done = -1
     speed = 0.0
 
-    def emit(current: str, force: bool = False) -> None:
+    def emit(current: str, force: bool = False, partial: int = 0) -> None:
+        """播报进度。
+
+        ``partial`` 是**当前文件已拷的字节数**——它还没算进 ``result.written``
+        （那个只记已落盘完成的文件）。分开记是为了让「已完成」这个数字永远
+        只包含真正 promote 成正式文件的字节，而进度条照样能往前走。
+        """
         nonlocal last_t, last_written, speed, emitted_written, emitted_done
         now = time.monotonic()
         if not force and now - last_t < interval:
             return
+        written = result.written + partial
         # 没有新进展就不重复播报——收尾那次 force 调用因此会在
         # "最后一个文件刚好报过进度" 时自然变成空操作。
-        if result.written == emitted_written and result.done == emitted_done:
+        if written == emitted_written and result.done == emitted_done:
             return
         delta_t = max(now - last_t, 1e-9)
-        speed = (result.written - last_written) / delta_t
-        last_t, last_written = now, result.written
-        emitted_written, emitted_done = result.written, result.done
+        speed = (written - last_written) / delta_t
+        last_t, last_written = now, written
+        emitted_written, emitted_done = written, result.done
         if on_progress is None:
             return
         try:
@@ -110,7 +121,7 @@ def install(
                 Progress(
                     done=result.done,
                     total=total,
-                    written=result.written,
+                    written=written,
                     total_uncompressed=total_u,
                     net_bytes=archive.net_bytes,
                     total_compressed=total_c,
@@ -134,16 +145,28 @@ def install(
 
         tmp = dest + ".part"
         file_bytes = 0
+        aborted = False
         try:
             with archive.open(entry) as src, open(tmp, "wb") as dst:
                 while True:
+                    # 每块都查一次停机。只在文件之间查的话，「停止」要等整个
+                    # 文件写完才生效，而最大的单文件有好几个 GB——用户按下去
+                    # 之后界面十几分钟没反应，只会认为程序卡死了。
+                    if stop_event is not None and stop_event.is_set():
+                        aborted = True
+                        break
                     buf = src.read(COPY_CHUNK)
                     if not buf:
                         break
                     dst.write(buf)
                     file_bytes += len(buf)
-            # 到这里 zipfile 已在 EOF 处校验过 CRC32；再原子替换。
-            os.replace(tmp, dest)
+                    emit(entry.name, partial=file_bytes)
+            if aborted:
+                # 半截文件没有任何价值：下次仍然从头下。绝不 promote 成正式文件。
+                _quiet_remove(tmp)
+            else:
+                # 到这里 zipfile 已在 EOF 处校验过 CRC32；再原子替换。
+                os.replace(tmp, dest)
         except Exception as exc:  # noqa: BLE001
             _quiet_remove(tmp)
             message = f"{entry.name}: {exc}"
@@ -155,6 +178,10 @@ def install(
                 result.requests = archive.net_requests
                 return result
             continue
+
+        if aborted:
+            result.stopped = True
+            break
 
         result.written += file_bytes
         result.done += 1
@@ -175,6 +202,29 @@ def _quiet_remove(path: str) -> None:
         os.remove(path)
     except OSError:
         pass
+
+
+def _sweep_parts(target: str, plan: Plan) -> int:
+    """清掉上次被强杀留下的 ``.part``。
+
+    关窗口时 worker 是 daemon 线程，进程会立刻退出，正在写的那个文件就留在
+    盘上了。我们从不续写半截文件（每个文件都从头下），所以这些残片只有占地方
+    一个作用——最大的单文件有 2 GB 往上。
+
+    只碰「清单里那条路径 + ``.part``」，不会误删别的东西。
+    """
+    removed = 0
+    for entry in list(plan.already) + list(plan.need):
+        try:
+            tmp = safe_join(target, entry.name) + ".part"
+        except UnsafePathError:
+            continue
+        try:
+            os.remove(tmp)
+            removed += 1
+        except OSError:
+            pass
+    return removed
 
 
 def _prune(target: str, names: list[str]) -> int:

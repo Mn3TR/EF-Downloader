@@ -13,7 +13,26 @@ import zipfile
 from dataclasses import dataclass
 
 from . import seed as seed_mod
-from .volumes import FileVolume, HttpVolume, MissingVolume, open_stream
+from .throttle import RateLimiter
+from .volumes import (
+    FileVolume,
+    HttpVolume,
+    MissingVolume,
+    Prefetcher,
+    open_stream,
+)
+
+
+def close_volumes(volumes) -> None:
+    """尽力关掉每一卷（把没消费完的预读字节记进浪费统计）。"""
+    for vol in volumes:
+        close = getattr(vol, "close", None)
+        if close is None:
+            continue
+        try:
+            close()
+        except Exception:  # noqa: BLE001 - 收尾时的异常不该盖住真正的错
+            pass
 
 
 class ArchiveError(RuntimeError):
@@ -57,11 +76,14 @@ class Archive:
     """
 
     def __init__(self, version: str, volumes: list, stream: io.BufferedReader,
-                 zf: zipfile.ZipFile):
+                 zf: zipfile.ZipFile, *, prefetcher: Prefetcher | None = None,
+                 limiter: RateLimiter | None = None):
         self.version = version
         self.volumes = volumes
         self._stream = stream
         self.zf = zf
+        self.prefetcher = prefetcher
+        self.limiter = limiter
         self._by_name: dict[str, zipfile.ZipInfo] = {}
         self.entries: list[Entry] = []
         for info in zf.infolist():
@@ -88,6 +110,16 @@ class Archive:
     def net_bytes(self) -> int:
         """真实下载字节数。本地卷恒为 0。"""
         return sum(getattr(v, "bytes", 0) for v in self.volumes)
+
+    @property
+    def prefetched_bytes(self) -> int:
+        """预读提前拿到、并且真的被用上的字节。"""
+        return self.prefetcher.fetched if self.prefetcher is not None else 0
+
+    @property
+    def prefetch_wasted_bytes(self) -> int:
+        """预读拿了却没人要的字节。计划有空洞时才会有，正常应接近 0。"""
+        return self.prefetcher.wasted if self.prefetcher is not None else 0
 
     @property
     def net_requests(self) -> int:
@@ -118,6 +150,10 @@ class Archive:
 
     # -- 生命周期 -------------------------------------------------------------
     def close(self) -> None:
+        # 顺序要紧：先关卷（把没用完的预读记成浪费），再关预读池。
+        close_volumes(self.volumes)
+        if self.prefetcher is not None:
+            self.prefetcher.shutdown()
         try:
             self.zf.close()
         finally:
@@ -141,20 +177,40 @@ class Archive:
 
 
 def open_remote(*, block: int = 1 << 20, release: seed_mod.Release | None = None,
-                range_log: list | None = None) -> Archive:
-    """联网打开最新全量包。"""
+                range_log: list | None = None, jobs: int = 1,
+                limit_rate: float = 0.0) -> Archive:
+    """联网打开最新全量包。
+
+    ``jobs > 1`` 开启顺序预读（把后面几个块提前取来），``limit_rate > 0``
+    把总下载速率压到该值以下。两者都由所有分卷共享同一份状态——限速器尤其
+    必须共享，否则每个分卷各自限速，总速率会随分卷数翻几十倍。
+    """
     rel = release or seed_mod.fetch_release()
+    prefetcher = Prefetcher(jobs) if jobs > 1 else None
+    limiter = RateLimiter(limit_rate) if limit_rate > 0 else None
     volumes: list = [
-        HttpVolume(p.index, p.url, p.size, range_log=range_log) for p in rel.packs
+        HttpVolume(
+            p.index,
+            p.url,
+            p.size,
+            range_log=range_log,
+            limiter=limiter,
+            prefetcher=prefetcher,
+        )
+        for p in rel.packs
     ]
     # 中央目录在末卷，1 MiB 块足以让反复回看命中缓存。
     stream = open_stream(volumes, buffer_size=block)
     try:
         zf = zipfile.ZipFile(stream)
     except Exception:
+        close_volumes(volumes)
         stream.close()
+        if prefetcher is not None:
+            prefetcher.shutdown()
         raise
-    return Archive(rel.version, volumes, stream, zf)
+    return Archive(rel.version, volumes, stream, zf, prefetcher=prefetcher,
+                   limiter=limiter)
 
 
 def open_local(directory: str, sizes: list[int], *, version: str = "(local)",

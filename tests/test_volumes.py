@@ -6,9 +6,18 @@
 from __future__ import annotations
 
 import io
+import threading
+import time
 import unittest
+from unittest import mock
 
-from efd.volumes import ConcatReader, MissingVolume, open_stream
+from efd.volumes import (
+    ConcatReader,
+    HttpVolume,
+    MissingVolume,
+    Prefetcher,
+    open_stream,
+)
 
 
 class MemoryVolume:
@@ -132,6 +141,217 @@ class TestConcatReader(unittest.TestCase):
         r = reader(b"abc")
         r.close()
         self.assertTrue(r.closed)
+
+
+class TestPrefetch(unittest.TestCase):
+    """预读的正确性：可以白读，但**绝不能重复下载**，也绝不能挂死。
+
+    全部走假 HTTP，不发真请求。假 CDN 记账每一次 Range 调用，所以
+    「同一块下载了两遍」这种错误会直接体现为请求次数不对。
+    """
+
+    def setUp(self):
+        self.calls: list[tuple[int, int]] = []
+        self.server = b""
+
+        def fake_urlopen(req, timeout=None):
+            rng = req.get_header("Range")
+            start, end = (int(x) for x in rng.removeprefix("bytes=").split("-"))
+            self.calls.append((start, end))
+            body = self.server[start : end + 1]
+            return FakeResponse(body)
+
+        patcher = mock.patch("efd.volumes.urllib.request.urlopen", fake_urlopen)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def volume(self, size: int, *, jobs: int = 1, block: int = 16, **kw):
+        self.server = bytes(range(256)) * (size // 256 + 1)
+        self.server = self.server[:size]
+        pf = Prefetcher(jobs) if jobs > 1 else None
+        self.addCleanup(lambda: pf and pf.shutdown())
+        vol = HttpVolume(0, "http://fake/vol", size, block=block,
+                         prefetcher=pf, cache_blocks=kw.pop("cache_blocks", 8), **kw)
+        self.addCleanup(vol.close)
+        return vol, pf
+
+    def ranges(self) -> list[tuple[int, int]]:
+        return list(self.calls)
+
+    def test_sequential_reads_fetch_each_block_once(self):
+        vol, _ = self.volume(64, jobs=1, block=16)
+        for off in range(0, 64, 16):
+            vol.read_at(off, 16)
+        self.assertEqual(len(self.calls), 4)
+
+    def test_repeated_read_of_same_block_hits_cache(self):
+        vol, _ = self.volume(64, jobs=1, block=16)
+        vol.read_at(0, 16)
+        vol.read_at(0, 16)
+        vol.read_at(8, 8)  # 同块内的另一段，仍应命中缓存
+        self.assertEqual(len(self.calls), 1)
+
+    def test_prefetch_does_not_double_download_the_block_it_prefetched(self):
+        """最重要的不变量：消费者读到的正是预读取回的那一份。"""
+        vol, _ = self.volume(256, jobs=4, block=16)
+        for off in range(0, 256, 16):
+            vol.read_at(off, 16)
+        starts = [s for s, _ in self.calls]
+        self.assertEqual(len(starts), len(set(starts)), f"有块被下载了两次：{starts}")
+
+    def test_prefetch_actually_runs_ahead(self):
+        vol, pf = self.volume(256, jobs=4, block=16)
+        vol.read_at(0, 16)
+        self.assertTrue(pf.enabled)
+        # 预读是真花了流量的——只在「用上」时才计数，所以这里看请求数。
+        deadline = time.monotonic() + 5.0
+        while len(self.calls) < 2 and time.monotonic() < deadline:
+            time.sleep(0.005)
+        self.assertGreaterEqual(len(self.calls), 2, "预读没有投出任何请求")
+
+    def test_jobs_one_never_prefetches(self):
+        vol, pf = self.volume(256, jobs=1, block=16)
+        for off in range(0, 256, 16):
+            vol.read_at(off, 16)
+        self.assertEqual(len(self.calls), 16, "jobs=1 时不该有任何预读")
+
+    def test_backward_seek_does_not_prefetch(self):
+        """中央目录解析会在卷尾来回跳，那里预读纯属浪费流量。"""
+        vol, _ = self.volume(256, jobs=4, block=16)
+        vol.read_at(224, 16)  # 先跳到尾部
+        before = len(self.calls)
+        vol.read_at(0, 16)  # 再跳回开头：这是回退，不预读
+        time.sleep(0.05)
+        self.assertEqual(len(self.calls), before + 1)
+
+    def test_prefetch_stops_at_end_of_volume(self):
+        vol, _ = self.volume(32, jobs=8, block=16)
+        vol.read_at(0, 16)
+        time.sleep(0.05)
+        # 只有两块，任何请求都不该越过卷尾。
+        for start, end in self.calls:
+            self.assertLess(start, 32)
+            self.assertLess(end, 32)
+
+    def test_no_waste_on_a_clean_sequential_run(self):
+        """一路顺序读下来不该有任何白读——缓存下限（jobs+2）就是为这个留的。"""
+        vol, pf = self.volume(512, jobs=4, block=16)
+        for off in range(0, 512, 16):
+            vol.read_at(off, 16)
+        vol.flush_stats()
+        self.assertEqual(pf.wasted, 0)
+        self.assertGreater(pf.fetched, 0)
+
+    def test_skipping_ahead_wastes_the_prefetched_blocks(self):
+        """计划有空洞时（续装跳过已装好的文件）预读会白读，必须如实记账。"""
+        vol, pf = self.volume(2048, jobs=4, block=16)
+        vol.read_at(0, 16)
+        self._wait_for_calls(4)  # 等预读把后面 3 块取回来
+        # 直接跳到很远的地方：中间那几块再也不会被读了。
+        vol.read_at(1600, 16)
+        vol.flush_stats()
+        self.assertGreater(pf.wasted, 0, "跳过一大段却没记任何浪费")
+
+    def test_blocks_prefetched_but_never_read_count_as_wasted_at_close(self):
+        vol, pf = self.volume(512, jobs=4, block=16)
+        vol.read_at(0, 16)
+        self._wait_for_calls(4)
+        vol.close()  # flush_stats 在这里把没消费的算成浪费
+        self.assertGreater(pf.wasted, 0)
+
+    def _wait_for_calls(self, count: int, timeout: float = 5.0) -> bool:
+        deadline = time.monotonic() + timeout
+        while len(self.calls) < count and time.monotonic() < deadline:
+            time.sleep(0.005)
+        return len(self.calls) >= count
+
+    def test_prefetched_block_is_counted_as_used(self):
+        vol, pf = self.volume(256, jobs=4, block=16)
+        # 慢一点读，给预读留出提前量，确保有块是「预读来的」。
+        for off in range(0, 256, 16):
+            vol.read_at(off, 16)
+            time.sleep(0.01)
+        self.assertGreater(pf.fetched, 0, "没有任何块算作预读命中")
+
+    def test_close_is_idempotent_with_prefetch_running(self):
+        vol, _ = self.volume(1024, jobs=4, block=16)
+        vol.read_at(0, 16)
+        vol.close()
+        vol.close()  # 第二次不该炸
+
+    def test_read_after_close_does_not_hang(self):
+        vol, _ = self.volume(128, jobs=4, block=16)
+        vol.read_at(0, 16)
+        vol.close()
+        deadline = time.monotonic() + 5.0
+        done = threading.Event()
+
+        def reader():
+            vol.read_at(16, 16)
+            done.set()
+
+        t = threading.Thread(target=reader, daemon=True)
+        t.start()
+        t.join(timeout=5.0)
+        self.assertTrue(done.wait(0), "关卷后的读取挂死了")
+        self.assertLess(time.monotonic(), deadline)
+
+
+class TestPrefetcherUnit(unittest.TestCase):
+    def test_jobs_one_is_disabled(self):
+        pf = Prefetcher(1)
+        self.assertFalse(pf.enabled)
+        self.assertIsNone(pf.submit(lambda: None))
+
+    def test_jobs_above_one_is_enabled(self):
+        pf = Prefetcher(4)
+        self.addCleanup(pf.shutdown)
+        self.assertTrue(pf.enabled)
+
+    def test_submit_runs_the_callable(self):
+        pf = Prefetcher(2)
+        self.addCleanup(pf.shutdown)
+        done = threading.Event()
+        pf.submit(done.set)
+        self.assertTrue(done.wait(5.0))
+
+    def test_submit_after_shutdown_returns_none(self):
+        """池关了之后提交必须是「静默失败」，让调用者撤登记，而不是抛。"""
+        pf = Prefetcher(2)
+        pf.shutdown()
+        self.assertIsNone(pf.submit(lambda: None))
+
+    def test_stats_are_thread_safe(self):
+        pf = Prefetcher(4)
+        self.addCleanup(pf.shutdown)
+
+        def bump():
+            for _ in range(200):
+                pf.note_used(1)
+                pf.note_wasted(1)
+
+        threads = [threading.Thread(target=bump) for _ in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        self.assertEqual(pf.fetched, 1600)
+        self.assertEqual(pf.wasted, 1600)
+
+
+class FakeResponse:
+    def __init__(self, body: bytes):
+        self._body = body
+        self.status = 206
+
+    def read(self):
+        return self._body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
 
 
 if __name__ == "__main__":

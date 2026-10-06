@@ -28,6 +28,7 @@ from . import __version__, config, detect, settings
 from .archive import Archive, open_remote
 from .installer import Progress, Result, install
 from .planner import Plan, make_plan
+from .throttle import MAX_JOBS, MIN_JOBS, RateError, check_jobs, format_rate, parse_rate
 from .util import free_bytes, human, human_time
 
 APP_TITLE = "EF DOWNLOADER"
@@ -50,12 +51,15 @@ RED = "#b91c1c"
 class Worker(threading.Thread):
     """在后台跑一次「检查」或「安装」，通过队列把消息发回 UI。"""
 
-    def __init__(self, q: queue.Queue, target: str, tryout: bool, do_install: bool):
+    def __init__(self, q: queue.Queue, target: str, tryout: bool, do_install: bool,
+                 *, jobs: int = 1, limit_rate: float = 0.0):
         super().__init__(daemon=True)
         self.q = q
         self.target = target
         self.tryout = tryout
         self.do_install = do_install
+        self.jobs = jobs
+        self.limit_rate = limit_rate
         self.stop_event = threading.Event()
 
     def say(self, kind: str, **payload) -> None:
@@ -63,7 +67,7 @@ class Worker(threading.Thread):
 
     def run(self) -> None:
         try:
-            with open_remote() as archive:
+            with open_remote(jobs=self.jobs, limit_rate=self.limit_rate) as archive:
                 self.say("status", text="正在解析中央目录…", state="正在检查…")
                 plan = self._plan(archive)
                 self.say("plan", plan=plan)
@@ -230,6 +234,24 @@ class App(tk.Tk):
             variable=self.var_tryout,
         ).pack(anchor="w", pady=(8, 0))
 
+        # 网络选项单独一行。默认值刻意保守：预读到底有没有用取决于链路，
+        # 没量过就别替用户开——开错了是要多花流量的。
+        net = ttk.Frame(box)
+        net.pack(fill="x", pady=(8, 2))
+
+        ttk.Label(net, text="并发预读", style="Name.TLabel").pack(side="left")
+        jobs0, rate0 = settings.remembered_net()
+        self.var_jobs = tk.StringVar(value=jobs0)
+        ttk.Spinbox(net, from_=MIN_JOBS, to=MAX_JOBS, width=4,
+                    textvariable=self.var_jobs).pack(side="left", padx=(6, 0))
+        ttk.Label(net, text="线程", style="Hint.TLabel").pack(side="left", padx=(4, 0))
+
+        ttk.Label(net, text="限速", style="Name.TLabel").pack(side="left", padx=(20, 0))
+        self.var_rate = tk.StringVar(value=rate0)
+        ttk.Entry(net, textvariable=self.var_rate, width=8).pack(side="left", padx=(6, 0))
+        ttk.Label(net, text="如 8M、512K；0 表示不限", style="Hint.TLabel").pack(
+            side="left", padx=(4, 0))
+
     def _build_plan(self) -> None:
         box = ttk.LabelFrame(self, text="计划")
         box.pack(fill="x", padx=16, pady=4)
@@ -390,14 +412,31 @@ class App(tk.Tk):
         )
         self.btn_stop.configure(state="normal" if on else "disabled")
 
+    def _net(self) -> tuple[int, float] | None:
+        """解析并发与限速。填错了当场弹窗，不要等到下载中途才炸。"""
+        try:
+            jobs = check_jobs(self.var_jobs.get())
+            rate = parse_rate(self.var_rate.get())
+        except RateError as exc:
+            messagebox.showwarning(APP_TITLE, str(exc))
+            return None
+        return jobs, rate
+
     def _start(self, do_install: bool) -> None:
         if self.worker and self.worker.is_alive():
             return
+        net = self._net()
+        if net is None:
+            return
+        jobs, rate = net
         target = self.var_target.get()
         settings.remember_target(target)
+        settings.remember_net(self.var_jobs.get(), self.var_rate.get())
         self.plan = None
         self._busy(True)
-        self.worker = Worker(self.q, target, self.var_tryout.get(), do_install)
+        self.log(f"网络：并发预读 {jobs} 线程，限速 {format_rate(rate)}。")
+        self.worker = Worker(self.q, target, self.var_tryout.get(), do_install,
+                             jobs=jobs, limit_rate=rate)
         self.worker.start()
 
     def on_check(self) -> None:

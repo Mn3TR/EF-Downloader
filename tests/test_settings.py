@@ -14,6 +14,7 @@ from pathlib import Path
 from unittest import mock
 
 from efd import settings
+from efd.throttle import DEFAULT_JOBS
 
 
 class SettingsCase(unittest.TestCase):
@@ -90,6 +91,48 @@ class TestPrecedence(SettingsCase):
         with mock.patch.object(settings, "remembered_target", return_value=""):
             with mock.patch("efd.detect.suggest_target", return_value=""):
                 self.assertEqual(settings.initial_target(), "")
+
+
+class TestNet(SettingsCase):
+    """并发与限速的持久化。跟目录一样：**读不到就用出厂值，绝不报错**。"""
+
+    def test_defaults_when_nothing_stored(self):
+        jobs, rate = settings.remembered_net()
+        self.assertEqual(jobs, str(DEFAULT_JOBS))
+        self.assertEqual(rate, "0")
+
+    def test_roundtrip(self):
+        settings.remember_net("4", "8M")
+        self.assertEqual(settings.remembered_net(), ("4", "8M"))
+        on_disk = json.loads(self.path.read_text(encoding="utf-8"))
+        self.assertEqual(on_disk["jobs"], "4")
+        self.assertEqual(on_disk["rate"], "8M")
+
+    def test_blank_values_fall_back_to_defaults(self):
+        # 界面把输入框清空时不该把「空」记成一个有效设置。
+        settings.remember_net("  ", "")
+        jobs, rate = settings.remembered_net()
+        self.assertEqual(jobs, str(DEFAULT_JOBS))
+        self.assertEqual(rate, "0")
+
+    def test_non_string_values_are_ignored(self):
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.write_text('{"jobs": 4, "rate": null}', encoding="utf-8")
+        jobs, rate = settings.remembered_net()
+        self.assertEqual(jobs, str(DEFAULT_JOBS))
+        self.assertEqual(rate, "0")
+
+    def test_net_and_target_do_not_clobber_each_other(self):
+        """两者共用一个文件——后写的不能把先写的冲掉。"""
+        settings.remember_target("D:/game")
+        settings.remember_net("6", "2M")
+        self.assertEqual(settings.remembered_target(), "D:/game")
+        self.assertEqual(settings.remembered_net(), ("6", "2M"))
+
+    def test_unwritable_location_does_not_raise(self):
+        with mock.patch.object(settings, "config_path",
+                               side_effect=OSError("boom")):
+            settings.remember_net("4", "8M")  # 不抛就算过
 
 
 if __name__ == "__main__":

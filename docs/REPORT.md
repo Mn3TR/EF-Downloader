@@ -341,7 +341,7 @@ EFD(EFDownloader)/
 │   ├── installer.py         安装循环（流式）
 │   ├── cli.py               命令行
 │   └── gui.py               图形界面（Tkinter）
-├── tests/                   66 个用例，标准库 unittest
+├── tests/                   109 个用例，标准库 unittest
 ├── data/
 │   ├── package_manifest.csv 1692 条清单（派生物）
 │   ├── hotfix_index_main.json / hotfix_index_initial.json

@@ -87,16 +87,22 @@ def install(
     total_c = plan.need_compressed
     started = last_t = time.monotonic()
     last_written = 0
+    emitted_written = emitted_done = -1
     speed = 0.0
 
     def emit(current: str, force: bool = False) -> None:
-        nonlocal last_t, last_written, speed
+        nonlocal last_t, last_written, speed, emitted_written, emitted_done
         now = time.monotonic()
         if not force and now - last_t < interval:
+            return
+        # 没有新进展就不重复播报——收尾那次 force 调用因此会在
+        # "最后一个文件刚好报过进度" 时自然变成空操作。
+        if result.written == emitted_written and result.done == emitted_done:
             return
         delta_t = max(now - last_t, 1e-9)
         speed = (result.written - last_written) / delta_t
         last_t, last_written = now, result.written
+        emitted_written, emitted_done = result.written, result.done
         if on_progress is None:
             return
         try:

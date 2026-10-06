@@ -117,7 +117,7 @@ efd/
 ├── cli.py         命令行
 └── gui.py         图形界面（Tkinter）
 
-tests/             标准库 unittest，66 个用例，大部分不需要网络
+tests/             标准库 unittest，109 个用例，大部分不需要网络
 data/              派生物与离线夹具
 docs/              调查报告与取证样本
 tools/             一次性工具

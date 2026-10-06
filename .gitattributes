@@ -1,0 +1,15 @@
+# 默认按文本处理，仓库内统一用 LF。
+* text=auto eol=lf
+
+# Windows 批处理必须保留 CRLF。
+*.cmd text eol=crlf
+
+# 二进制夹具与取证样本：绝不能被换行符转换或 diff 处理。
+*.bin binary
+*.chk binary
+*.blc binary
+*.exe binary
+*.dll binary
+
+# 派生的清单 CSV 用 LF，便于 diff。
+*.csv text eol=lf

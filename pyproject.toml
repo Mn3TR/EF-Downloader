@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "efd"
+version = "0.1.0"
+description = "《明日方舟：终末地》省空间下载器 —— 流式解包，压缩包从不落盘"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Proprietary" }
+keywords = ["arknights-endfield", "downloader", "zip", "streaming"]
+classifiers = [
+    "Environment :: Console",
+    "Environment :: Win32 (MS Windows)",
+    "Intended Audience :: End Users/Desktop",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3",
+    "Topic :: Games/Entertainment",
+    "Topic :: System :: Archiving :: Compression",
+]
+# 刻意的零依赖：只用标准库，连测试都用 unittest 而不是 pytest。
+# 目标机器常常是「快满了的游戏盘 + 干净的 Python」，装不动任何东西。
+dependencies = []
+
+[project.scripts]
+efd = "efd.cli:main"
+
+[project.gui-scripts]
+efd-gui = "efd.gui:main"
+
+[tool.setuptools]
+packages = ["efd"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B", "UP", "I"]
+ignore = ["E501"]

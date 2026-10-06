@@ -119,7 +119,7 @@ python tools/build_exe.py --setup       # 一次性：建构建 venv
 python tools/build_exe.py --clean --verify
 ```
 
-产物 **`dist/EFD.exe`，13.6 MiB**。三种用法共用同一个文件：
+产物 **`dist/EFD.exe`，13.7 MiB**。三种用法共用同一个文件：
 
 | 怎么用 | 结果 |
 |---|---|

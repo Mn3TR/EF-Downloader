@@ -438,7 +438,7 @@ EFD(EFDownloader)/
 
 | 形态 | 产物 | 目标机要求 |
 |---|---|---|
-| 单文件 exe | `dist/EFD.exe`（13.6 MiB） | **无需 Python**，双击即用 |
+| 单文件 exe | `dist/EFD.exe`（13.7 MiB） | **无需 Python**，双击即用 |
 | wheel | `efd-<版本>-py3-none-any.whl`（33 KB） | Python 3.10+，`pip install efd` |
 | 源码 | 本仓库 | Python 3.10+，`python -m efd gui` |
 

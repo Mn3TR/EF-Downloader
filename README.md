@@ -13,7 +13,7 @@
 与上面的 110.97 GiB 只差 0.23 GiB —— **`total_size` 描述的是「两份副本同时存在」的峰值，
 而不是安装后的体积**。它和我们算的是同一件事。
 
-> 为什么在乎：目标盘 `D:` 只有 91.2 GB 可用。官方路径**根本装不下**。
+> 目标盘 `D:` 当时只有 91.2 GB 可用。官方路径**根本装不下**。
 
 ---
 
@@ -30,31 +30,79 @@
 
 ---
 
+## 实测：真的从零装完过一次
+
+不是「理论上可行」。下面这组数字来自一次真实的完整安装（2026-10-07），
+装完直接双击启动器进游戏。
+
+| | |
+|---|---|
+| 落盘 | **1601 个文件 / 57.96 GiB** |
+| 与清单对账 | 1601 条**全部匹配，尺寸零不符** |
+| 联网下载 | leg1+leg2 合计 **56.70 GiB / 4.88 h = 3.38 MiB/s** 平均 |
+| 磁盘账 | `D:` 91.16 GB 可用 → 31.6 GB（预期 33.2，差 1.6 GB 是运行期日志与 NTFS 元数据） |
+| 启动结果 | 游戏正常进入，注册表写下 **189 个值** |
+
+中途机器休眠断过两次（不是工具的问题），所以分三段跑完。
+每一段都是**直接重跑**接上的，**没有重下任何已装好的文件**：
+
+| 段 | 文件 | 体积 | 耗时 | 均速 |
+|---|---|---|---|---|
+| 试点 | 540 | 1.26 GiB | ~7 min | — |
+| leg 1 | 744 | 14.22 GiB | 2.65 h | 1.52 MiB/s |
+| leg 2 | 317 | 42.47 GiB | 2.23 h | 5.41 MiB/s |
+
+两段速度差是网络时段差异，不是工具行为差异；设计吞吐（`--jobs 8` 实测）是 3.89 MiB/s。
+> 全文速率按 **1024 进制**（MiB/s）。`efd` 自己的输出把同一个数标成 `MB/s`，
+> 数值一样，只是标签不同 —— 对比时别当成两种单位。
+
+### 装完之后，游戏自己写了 12 个文件
+
+游戏跑起来后往目录里写了 12 个**清单里没有**的文件 —— 存档、日志、缓存：
+
+```
+eld_Endfield.db                       mmkv/login_cache
+U8Data/config/Launcher.meta           mmkv/login_cache.crc
+HGEventLog_Encrypted/sdid_s           mmkv/gameprotocol_cache
+AntiCheatExpert/pld.dat               mmkv/gameprotocol_cache.crc
+CrashSightLog/CrashSight.*.log  (2)   .../crashsight_data_db  (2)
+```
+
+`efd plan --stale` 会把这 12 个**全部**列为「本地多余(陈旧)」。**删了会重置登录态。**
+这就是 `--prune` 的真实风险面，详见[已知限制](#已知限制与风险)。
+
+### 独立监视线：32 分钟、64 次采样
+
+下载途中挂了一个外部脚本，每 30 s 采样一次（进程是否活着、已写字节、`.part` 数量、文件计数）：
+
+- 进程**全程存活**；已写字节**单调不回退**
+- 同时存在的 `.part` **恒为 1 个** —— 不会半路堆积残片
+- 8 次换文件交接，**每次 `.part` 归零都恰好 +1 个文件**
+- 界面读数和磁盘实测一致（30 min 时界面 8.55 GB vs 实测 8.45 GiB）
+- v0.2.3 修掉的「提前报完成」**没有复现**
+
+---
+
 ## 快速开始
 
 需要 **Python 3.10+**（自带 tkinter 即可，无需 `pip install` 任何东西）。
 
 ```powershell
-# 图形界面（或直接双击 run-gui.cmd / dist\EFD.exe）
-python -m efd gui
-
-# 命令行：先看计划，不写任何文件
-python -m efd plan
-
-# 确认无误后开装（不加 --apply 则永远只是预览）
-python -m efd install --apply
+python -m efd gui                 # 图形界面（也可双击 run-gui.cmd / dist\EFD.exe）
+python -m efd plan                # 先看计划，不写任何文件
+python -m efd install --apply     # 确认无误后开装
 ```
 
-**`--target` 可以省略。** 工具会从注册表里找鹰角启动器的安装位置，
-再扫 `<启动器>\games\*` 认 `Endfield.exe` / `Endfield_Data`，自动定位游戏目录。
-探测不到就**报错让你显式指定**，绝不会猜一个路径——毕竟这是要往盘里写 58 GB 的操作。
+**`--target` 可以省略。** 工具会从注册表找鹰角启动器的位置，再扫 `<启动器>\games\*`
+认 `Endfield.exe` / `Endfield_Data`，自动定位游戏目录。探测不到就**报错让你显式指定**，
+绝不猜路径 —— 毕竟这是要往盘里写 58 GB 的操作。
 
-跑到一半断了？**直接重跑**。已装好的文件按「存在且尺寸相同」跳过，
+跑到一半断了？**直接重跑。** 已装好的文件按「存在且尺寸相同」跳过，
 不产生任何网络请求，续传是零成本的。
 
 **游戏更新了怎么办？** 现在只能**重新全量装一遍** —— **增量更新还没实现**。
 EFD 不记录自己装的是哪个版本，也没有本地文件的内容指纹，所以每次都是重新对清单、
-按「存在且尺寸相同」跳过。版本更新会改掉一批文件（尺寸也跟着变），那部分只能重下。
+按「存在且尺寸相同」跳过；版本更新会改掉一批文件（尺寸多半跟着变），那部分只能重下。
 通道 A 本身也没有增量这个选项：它是一个 53 GiB 的整包。
 具备增量条件的通道 B **尚未实现**，见[已知限制](#已知限制与风险)。
 
@@ -91,58 +139,18 @@ EFD 不记录自己装的是哪个版本，也没有本地文件的内容指纹�
 
 | jobs | 实测吞吐 | 相对单流 |
 |---|---|---|
-| 1 | 2.74 MB/s | 1.00× |
-| 4 | 3.58 MB/s | 1.30× |
-| **8** | **3.89 MB/s** | **1.42×** |
-| 16 | 3.60 MB/s | 1.31× |
+| 1 | 2.74 MiB/s | 1.00× |
+| 4 | 3.58 MiB/s | 1.30× |
+| **8** | **3.89 MiB/s** | **1.42×** |
+| 16 | 3.60 MiB/s | 1.31× |
 
-代价是「白读」——预读只管往后取块，不看计划，跨过空洞时会取来没人要的数据：
-续装（1601 条里 1061 条待装）白读 **371 MB / 52.52 GB = 0.7%**，全新安装是 **0**。
-块对齐本身另有 1.73 MB / 52.52 GB = 0.00% 的开销。
-
-复现：`python tools/bench_prefetch.py`（联网，量速度）、
-`python tools/bench_gaps.py`（纯计算，量白读）。
+代价是「白读」—— 预读只管往后取块、不看计划，跨过空洞时会取来没人要的数据：
+续装（1601 条里 1061 条待装）白读 **371 MB / 52.52 GB = 0.7%**，全新安装是 **0**；
+块对齐另有 1.73 MB = 0.00% 的开销。复现：`python tools/bench_prefetch.py`（联网）、
+`python tools/bench_gaps.py`（纯计算）。
 
 **这不是把顺序读改成散点读。** 散点 Range 我们量过，8 并发也只有 3.3 MB/s，
 比单流顺序还慢；预读保持同一条顺序路径，只是把每次请求的建连与握手延迟叠起来。
-
----
-
-## 打包成单文件 exe
-
-目标机器**不需要装 Python**。
-
-```powershell
-build.cmd                              # 双击也行；首次会自动建 .venv-build/ 并装 PyInstaller
-# 等价于：
-python tools/build_exe.py --setup       # 一次性：建构建 venv
-python tools/build_exe.py --clean --verify
-```
-
-产物 **`dist/EFD.exe`，13.7 MiB**。三种用法共用同一个文件：
-
-| 怎么用 | 结果 |
-|---|---|
-| 双击 | 直接进图形界面 |
-| `EFD.exe plan --target "…"` | 正常命令行输出 |
-| `EFD.exe gui` | 图形界面，并自动摘掉控制台窗口 |
-
-之所以不用 PyInstaller 的 `--noconsole`：那会把 CLI 的输出一起干掉。控制台模式 +
-`FreeConsole()` 能同时满足两种用法，代价是**只需要一个文件**。
-
-`--verify` 会真的把 exe 跑起来做三项冒烟测试：`--version`、`--help` 里四个子命令齐全、
-无参数启动后窗口**真的出现**（用 `EnumWindows` 查，不是看进程活着）且关闭后无残留窗口。
-
-两个刻意的设计：
-
-* **不碰你的全局 Python。** 优先用仓库内的 `.venv-build/`，没有就提示 `--setup`。
-* **把 PyInstaller 的缓存挪出 C 盘。** 它默认写 `%LOCALAPPDATA%`；构建脚本改到 `build/` 下。
-
-### 单文件模式的代价
-
-onefile 每次启动都会先把自己解压到 `%TEMP%\`（约 13 MB），首次启动慢 1–2 秒。
-如果目标机器 C 盘很紧，把 spec 里的 `EXE(...)` 换成分目录模式（PyInstaller 的
-`--onedir`）可以避免这个解压。
 
 ---
 
@@ -164,16 +172,15 @@ flowchart LR
 ```
 
 这样 **zip64 / deflate / CRC32 校验 / 中央目录解析全部由标准库负责**，
-我们一行都不用写——这也是整个方案只有几百行的原因。
+我们一行都不用写 —— 这也是整个方案只有几百行的原因。
 
 三个关键事实（都有实测支撑，见 [docs/REPORT.md](docs/REPORT.md)）：
 
 1. **一次 Range 请求就能拿到全量清单。** 中央目录 259,944 B，完整落在末卷内，
    合计下载 254.11 KB。
-2. **顺序读远快于散点读**，所以安装按 `header_offset` 排序，线性扫描归档，
-   **零回退读**。8 路**散点**并发只有 3.3 MB/s，比单流顺序还慢
-   （见 [docs/REPORT.md](docs/REPORT.md)）——这条推翻的是「把读打散来做并发」，
-   不是「一切并发」：**不改变读取顺序**的预读确实能提速，
+2. **顺序读远快于散点读**，所以安装按 `header_offset` 排序、线性扫描归档，
+   **零回退读**。8 路**散点**并发只有 3.3 MB/s，比单流顺序还慢 —— 这条推翻的是
+   「把读打散来做并发」，不是「一切并发」：**不改变读取顺序**的预读确实能提速，
    见[关于 `--jobs`](#关于---jobs并发预读)。
 3. **`.chk` 从 CDN 下来与清单逐字节一致**，不需要解密或二次解包。
 
@@ -184,8 +191,35 @@ flowchart LR
 | 官方 | 53.01 GiB | 57.96 GiB | — | **110.97 GiB** |
 | 本方案 | 不落盘 | 57.96 GiB | 1.50 GiB | **59.46 GiB** |
 
-「单文件缓冲」那一项是最大单文件的大小。安装是**流式**的：
-读一块、写一块、校验、原子替换，内存占用恒定，不随文件大小增长。
+「单文件缓冲」那一项是最大单文件的大小。安装是**流式**的：读一块、写一块、校验、
+原子替换，内存占用恒定，不随文件大小增长。
+
+---
+
+## 打包成单文件 exe
+
+目标机器**不需要装 Python**。
+
+```powershell
+build.cmd                              # 双击也行；首次会自动建 .venv-build/ 并装 PyInstaller
+# 等价于：
+python tools/build_exe.py --setup       # 一次性：建构建 venv
+python tools/build_exe.py --clean --verify
+```
+
+产物 **`dist/EFD.exe`，13.7 MiB**，三种用法共用同一个文件：双击直接进图形界面；
+`EFD.exe plan --target "…"` 是正常命令行输出；`EFD.exe gui` 进界面并自动摘掉控制台窗口。
+之所以不用 PyInstaller 的 `--noconsole`：那会把 CLI 的输出一起干掉；控制台模式 +
+`FreeConsole()` 能同时满足两种用法，代价是**只需要一个文件**。
+
+`--verify` 会真的把 exe 跑起来做三项冒烟测试：`--version`、`--help` 里四个子命令齐全、
+无参数启动后窗口**真的出现**（用 `EnumWindows` 查，不是看进程活着）且关闭后无残留窗口。
+
+两个刻意的设计：**不碰你的全局 Python**（优先用仓库内的 `.venv-build/`，没有就提示
+`--setup`）；**把 PyInstaller 的缓存挪出 C 盘**（它默认写 `%LOCALAPPDATA%`，构建脚本改到 `build/`）。
+
+> onefile 每次启动都会先把自己解压到 `%TEMP%\`（约 13 MB），首次启动慢 1–2 秒。
+> 目标机器 C 盘很紧的话，把 spec 里的 `EXE(...)` 换成分目录模式（`--onedir`）可以避免。
 
 ---
 
@@ -208,51 +242,26 @@ efd/
 │   ├── http.py        HTTP Range 分卷 + 取数重试（核心）
 │   ├── stream.py      分卷 → 连续流（ConcatReader）
 │   └── prefetch.py    顺序预读线程池
-├── ui/            Tkinter 界面
-│   ├── app.py         窗口搭建
-│   ├── panels.py      日志/计划/详情面板
-│   ├── handlers.py    回调（按钮、进度、收尾）
-│   ├── messages.py    worker ↔ 界面的消息协议
-│   ├── theme.py       观感
-│   └── entry.py       进 GUI 的入口（摘控制台、设 DPI）
-└── cli/           命令行
-    ├── parser.py      参数解析
-    ├── commands.py    plan / install / probe / gui
-    ├── report.py      人读与 --json 两种输出
-    ├── runner.py      子命令分发与异常→退出码
-    └── exitcode.py    退出码常量
+├── ui/            Tkinter 界面（app / panels / handlers / messages / theme / entry）
+└── cli/           命令行（parser / commands / report / runner / exitcode）
 
 packaging/         PyInstaller 入口、spec、图标
-tools/             build_exe.py（构建 exe）、make_icon.py、export_manifest.py
-                   bench_prefetch.py / bench_gaps.py（预读的实测脚本，见「关于 --jobs」）
-ico.png            图标源图，make_icon.py 从它生成 packaging/efd.ico
+tools/             build_exe.py、make_icon.py、export_manifest.py、bench_*.py
 build.cmd          双击构建 exe
 run-gui.cmd        双击从源码启动图形界面
-LICENSE            MIT
-
-tests/             标准库 unittest，437 个用例，大部分不需要网络
+tests/             unittest，438 个用例，大部分不需要网络
 data/              派生物与离线夹具
 docs/              调查报告与取证样本
-
-build/ dist/       构建中间产物与 EFD.exe（已被 .gitignore 忽略）
-.venv-build/       构建用 venv，同样不入库
+LICENSE            MIT
 ```
 
 **`core/planner.py` 和 `core/installer.py` 是 CLI 与 GUI 的唯一实现。**
 `cli/` 与 `ui/` 都只负责「显示」与「转发」，不重复任何业务逻辑。
 
----
-
-## 数据与夹具
-
-| 文件 | 是什么 |
-|---|---|
-| `data/package_manifest.csv` | 1692 条中央目录清单，**派生物**，由下一条重建 |
-| `data/fixtures/vol054.bin` | 末卷（6.7 MB），中央目录完整落在其中 |
-| `data/fixtures/pack_sizes.json` | 54 卷的真实尺寸，由 Seed 接口导出 |
-| `data/hotfix_index_*.json` | 资源热更新清单（通道 B，见「已知限制」） |
-
-只有末卷也能解析出**完整清单**，因为 `MissingVolume` 会提供正确的尺寸占位——
+`data/` 里放的是派生物与夹具：`package_manifest.csv`（1692 条中央目录条目）、
+`fixtures/vol054.bin`（末卷 6.7 MB，中央目录完整落在其中）、
+`fixtures/pack_sizes.json`（54 卷真实尺寸）、`hotfix_index_*.json`（通道 B 清单）。
+**只有末卷也能解析出完整清单**，因为 `MissingVolume` 会提供正确的尺寸占位 ——
 偏移量全部成立。这既是测试夹具，也是断网时重建清单的手段。
 
 ```powershell
@@ -264,8 +273,8 @@ python tools/export_manifest.py             # 重建清单 CSV
 
 ## 已知限制与风险
 
-- **接口不是公开 API。** Seed 地址与 appcode 都是从启动器自身流量里取的，
-  服务端随时可能改。改动时先看 [`efd/core/config.py`](efd/core/config.py)。
+- **接口不是公开 API。** Seed 地址与 appcode 都是从启动器自身流量里取的，服务端随时
+  可能改。改动时先看 [`efd/core/config.py`](efd/core/config.py)。
 - **增量更新还没实现 —— 游戏版本更新后只能全量重装。** 目前只实现了通道 A
   （启动器全量客户端包）：它是一个 53 GiB 的整包，**没有「只下变了的部分」这个选项**。
   通道 A 的 URL 里带版本号，所以取到新包就是新版本、不会装错，但代价是重新下 53 GiB。
@@ -275,21 +284,22 @@ python tools/export_manifest.py             # 重建清单 CSV
   缺的是「算本地 md5 列表 → 比对新清单 → 只下差异」这一段。
   > 顺带一提：`--prune` 之前会删掉热更新下来的文件，等于每次更新都把增量成果清零。
   > 那个 bug 已修（见下一条），它是做增量的**前置条件**。
-- **反作弊（ACE）不在本工具职责内。** 它装到 `C:\Program Files\AntiCheatExpert`，
-  且在游戏启动时会被自动重装；解压它的文件并不等于完成安装。如果 C 盘紧张，
-  这一点值得注意。
-- **网络抖动会重试，但重试完还失败就会停下来。** CDN（或中间代理）偶尔会直接掐断
-  连接：实测 400 次 Range 请求里出现过 1 次
-  `URLError: [SSL: UNEXPECTED_EOF_WHILE_READING]`。一个 1 GiB 文件要上千次请求，
-  按这个概率**不重试几乎必然死在半路**。所以每次取数都会重试 3 次（退避 0.5s/1s），
-  短读也当作抖动重发。**连续失败 3 次之后安装会停下并明确报「未完成」**，
-  而不是像 0.2.3 之前那样画满进度条弹「安装完成」。停下不会白干：已装好的文件
-  会被跳过，重新点【开始安装】就从断掉的那个文件接着来。
-- **未验证 `--prune` 在真实残缺安装上的表现。** 它会删掉清单里没有的本地文件，
-  请先用 `efd plan --stale` 看清楚会删什么。**`StreamingAssets/VFS` 已从删除范围里排除**：
-  通道 B 热更新会往那里新增文件，而新增的条目不在通道 A 的清单里（实测 115 个文件、
+- **`--prune` 会删掉游戏运行期产生的文件。** 它按「不在通道 A 清单里 = 陈旧」判定，
+  而游戏自己写的存档/日志/缓存全都不在清单里 —— 实测装完启动一次就多出 **12 个**
+  这样的文件（`mmkv/login_cache`、`eld_Endfield.db`、`U8Data/config/Launcher.meta`、
+  `HGEventLog_Encrypted/sdid_s` 等），**删掉会重置登录态**。所以请先用
+  `efd plan --stale` 看清楚会删什么。**`StreamingAssets/VFS` 已从删除范围里排除**：
+  通道 B 热更新会往那里新增文件，而新增条目不在通道 A 的清单里（实测 115 个文件、
   7.23 GiB），按「不在清单里 = 陈旧」去删会直接删掉游戏资源。代价是旧版本留下的
   VFS 残留（实测 67 个文件、0.71 GiB）也回收不了 —— 漏删好过误删。
+- **反作弊（ACE）不在本工具职责内。** 它装到 `C:\Program Files\AntiCheatExpert`，
+  且在游戏启动时会被自动重装；解压它的文件并不等于完成安装。C 盘紧张的话值得注意。
+- **网络抖动会重试，但重试完还失败就会停下来。** CDN（或中间代理）偶尔会直接掐断连接：
+  实测 400 次 Range 请求里出现过 1 次 `URLError: [SSL: UNEXPECTED_EOF_WHILE_READING]`。
+  一个 1 GiB 文件要上千次请求，按这个概率**不重试几乎必然死在半路**。所以每次取数都会
+  重试 3 次（退避 0.5s/1s），短读也当作抖动重发。**连续失败 3 次之后安装会停下并明确报
+  「未完成」**，而不是像 0.2.3 之前那样画满进度条弹「安装完成」。停下不会白干：
+  已装好的文件会被跳过，重新点【开始安装】就从断掉的那个文件接着来。
 - **仅 Windows 验证过。** 代码本身是跨平台的，但 GUI 用了 `windll.shcore` 做高 DPI
   （已 try/except），其余部分是纯标准库。
 
@@ -299,20 +309,13 @@ python tools/export_manifest.py             # 重建清单 CSV
 它没有破解、没有修改游戏内容、没有绕过任何付费或授权校验，但确实不是官方支持的安装方式。
 请自行判断是否接受，并自行承担风险。
 
-### 分发时要知道的事
-
 **MIT 许可**（见 [LICENSE](LICENSE)）覆盖的是**本仓库的代码**，不覆盖游戏本体或官方更新包。
-代码是 MIT，游戏内容不是你的，两者别混为一谈。
 
-把 exe 发给别人时，对方会碰到：
-
-* **SmartScreen 一定会拦。** exe 未做代码签名，从浏览器/聊天软件下载后双击会显示
-  「Windows 已保护你的电脑 · 未知发布者」，得点「更多信息 → 仍要运行」。
-  彻底解决要买代码签名证书，代码层面无解。
-* **部分杀软可能误报。** PyInstaller 的单文件 exe 是误报重灾区。
-  exe 已带完整版本资源（发布者、版本、版权、MIT 声明），能减轻但不能消除。
-* 如果对方**完全没装鹰角启动器**，这套文件能否独立启动游戏**未经验证**。
-  我们只验证过「启动器已装的前提下，它认账」。
+把 exe 发给别人时，对方会碰到：**SmartScreen 一定会拦**（未做代码签名，得点
+「更多信息 → 仍要运行」；彻底解决要买证书，代码层面无解）；**部分杀软可能误报**
+（PyInstaller 单文件 exe 是误报重灾区，exe 已带完整版本资源，能减轻但不能消除）；
+以及如果对方**完全没装鹰角启动器**，这套文件能否独立启动游戏**未经验证** ——
+我们只验证过「启动器已装的前提下，它认账」。
 
 ---
 
@@ -332,6 +335,6 @@ python -m efd plan --target . --limit 5     # 快速干跑
    那会让内存峰值等于文件大小。
 5. **路径校验是显式拒绝，不是静默改写**（`core/util.safe_join`）。
 6. **管道输出统一 UTF-8**（`core/util.setup_output_encoding`）。
-   控制台跟随控制台代码页；管道/重定向写 UTF-8。
-   不这么做的话，PowerShell 7 / CI 读到的会是 cp936 字节，整段变成 `U+FFFD`。
-   这个坑咬过两次（CLI 一次、构建脚本一次），所以提成了共用函数。
+   控制台跟随控制台代码页；管道/重定向写 UTF-8。不这么做的话，PowerShell 7 / CI
+   读到的会是 cp936 字节，整段变成 `U+FFFD`。这个坑咬过两次（CLI 一次、构建脚本一次），
+   所以提成了共用函数。

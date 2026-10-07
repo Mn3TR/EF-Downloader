@@ -2,7 +2,8 @@
 
 > 调查日期：2026-10-06
 > 目标机器：本机（C: 30 GB / D: 111.8 GB / E: 81.5 GB）
-> 结论状态：**方案已验证可跑；首次安装已完成 1.26 GB 试点；剩余 56.59 GB 待装**
+> 结论状态：**方案已完整验证；1601 个文件 / 57.96 GiB 已全部装完，游戏可正常启动**
+> （2026-10-07 09:36 完成；实测细节见第 11 章）
 
 ---
 
@@ -236,7 +237,7 @@ D:\Apps\Hypergryph Launcher\              ← 启动器已装，v1.6.0.1604
 └── games\
     └── Arknights Endfield\              ← 目标目录，安装前为空
 
-HKCU:\Software\Hypergryph\Endfield                     ← 存在但【空】（游戏未注册）
+HKCU:\Software\Hypergryph\Endfield                     ← 安装前为空；游戏启动后写入 189 个值（见第 11 章）
 HKCU:\Software\Hypergryph\Launcher
     device_id = F12C55E4-...
 HKCU:\Software\Hypergryph\Launcher\2f2b80a6...\install_path = D:\Apps\Hypergryph Launcher
@@ -291,7 +292,10 @@ plugins\ / resources\ / sdkresources\ / translations\ / U8Data\ / WebviewConfig\
 
 ---
 
-## 8. 剩余工作
+## 8. 剩余工作（本文档写作时）
+
+> ⚠️ **本章是历史记录。** 当时 StreamingAssets 尚未安装；该部分已于 2026-10-07 09:36
+> 全部装完，**本章已不再描述待办事项**。完成情况见第 11 章。
 
 | 项 | 量 | 估算 |
 |---|---|---|
@@ -315,7 +319,7 @@ python -m efd install --target "D:\Apps\Hypergryph Launcher\games\Arknights Endf
 | # | 风险 | 等级 | 说明 / 缓解 |
 |---|---|---|---|
 | 1 | ~~ACE 反作弊需自己安装~~ | ✅ **解除** | 游戏启动时自动安装到 `C:\Program Files\AntiCheatExpert` |
-| 2 | 启动器是否认账 | ⚠️ **未知** | `game_files` 完整性清单已就位且字节正确（CRC32 全过），理论上能过检查；需实测 |
+| 2 | 启动器是否认账 | ✅ **已解除** | 实测：装完后打开启动器与游戏均正常，注册表写下 189 个值（见第 11 章） |
 | 3 | **C 盘只剩 0.89 GB** | ⚠️ **高** | ACE(~89MB) + 着色器缓存 + 日志都吃 C 盘。建议立刻清理（含 166 MB 下载器残留） |
 | 4 | 首次启动会走热更新 | ℹ️ 正常 | 客户端 1.5.3 资源 < 当前 hotfix `10506507-7`，会有一波增量（走通道 B，量小） |
 | 5 | ToS 灰色地带 | ⚠️ 中 | 绕过了官方分发链路的下载/解压环节 |
@@ -331,6 +335,96 @@ python -m efd install --target "D:\Apps\Hypergryph Launcher\games\Arknights Endf
 2. **打开鹰角启动器**，看它面对一个"半装"目录的反应 → 这是验证风险 #2 的最便宜方式
 3. 根据结果决定是「继续补 StreamingAssets」还是「换策略」
 4. ~~跑全量前给 `install.py` 补 `--resume` 与断点日志~~ → ✅ 已实现（判定逻辑在 `efd/core/planner.py`，CLI 与 GUI 共用）
+
+---
+
+## 11. 完整安装实测（2026-10-07）
+
+> 本章是第 5–8 章的**实测收尾**：前面几章的数字来自试点与估算，本章是"真的从零装完一次"的记录。
+
+### 11.1 结果对账
+
+装在 `D:\Apps\Hypergryph Launcher\games\Arknights Endfield`，**1613 个文件 / 57.96 GiB**。
+
+| 项 | 数 |
+|---|---|
+| 清单声明的文件 | 1601 |
+| 磁盘上匹配 | **1601（尺寸不符 0 条）** |
+| 磁盘多出 | 12（全部是游戏运行后自己写的，见 11.4） |
+| 落盘占用 | 62,233,961,484 B = **57.96 GiB** |
+
+### 11.2 三段耗时（按 mtime 还原）
+
+整个过程被两次**机器休眠/中断**切成三段（与工具无关：System 日志显示 `LastBootUpTime = 2026/10/6 9:05:00`，期间未重启）：
+
+| 段 | 文件 | 体积 | 耗时 | 速率 |
+|---|---|---|---|---|
+| 阶段 A 试点 | 540 | 1.26 GiB | ~7 min | — |
+| 空档 | — | — | **265.7 min** | — |
+| leg 1 | 744 | 14.22 GiB | 2.65 h | 1.52 MiB/s |
+| 空档 | — | — | **103.3 min** | — |
+| leg 2 | 317 | 42.47 GiB | 2.23 h | **5.41 MiB/s** |
+
+**联网段合计：56.70 GiB / 4.88 h = 3.38 MiB/s 平均。** 1601 个文件的 mtime 跨度 11.1 h（含上述停顿）。
+最后写入的是 `Endfield_Data/StreamingAssets/VFS/F84BF5E6/…`，收在 `index_main.json`（09:36:50）。
+
+> leg 2 的 5.41 MiB/s 明显高于第 5.3 章 `--jobs 8` 的 3.89 MB/s——说明**瓶颈确实在网络链路**，
+> 链路好时段速就上去，与安装器本身无关。
+
+### 11.3 游戏确实启动过（硬证据）
+
+| 证据 | 内容 |
+|---|---|
+| `HKCU:\Software\Hypergryph\Endfield` | **189 个值**，含 Unity 屏幕/音频/语言设置与 `unity.player_sessionid_*` / `player_session_count_*` |
+| `U8Data\config\Launcher.meta` | 76 B，运行时生成（base64 串） |
+| `CrashSightLog\CrashSight.*.log` | `app:[abfe34dd3a]`，`response code is 200`，`CLOSE LOG!` |
+| 启动器**没有重新下载** | `launcher_tmp\...\tmp` 为空；下载器残留 exe 的 mtime 仍是安装前的 2026/10/6 20:48:32 |
+
+**这一条同时推翻了本文档早先的断言**（原文见第 6 章旧版：`HKCU:\…\Endfield ← 存在但【空】（游戏未注册）`），
+也解除了风险 #2「启动器是否认账」——**认账**。
+
+### 11.4 装完之后，游戏自己写了 12 个文件
+
+**这是 `--prune` 的真实风险面。** 这 12 个文件的 mtime 都晚于安装结束（09:36:50），
+且 `efd plan --stale` 会把它们**全部列为"本地多余(陈旧)"**：
+
+```
+eld_Endfield.db
+AntiCheatExpert/pld.dat
+CrashSightLog/CrashSight.1791349891.11800.log
+CrashSightLog/CrashSight.1791349901.7892.log
+Endfield_Data/Plugins/x86_64/wesight/crashsight_data/Endfield.exe_crashsight_data_db
+Endfield_Data/Plugins/x86_64/wesight/crashsight_data/PlatformProcess.exe_crashsight_data_db
+HGEventLog_Encrypted/sdid_s
+U8Data/config/Launcher.meta
+mmkv/gameprotocol_cache
+mmkv/gameprotocol_cache.crc
+mmkv/login_cache
+mmkv/login_cache.crc
+```
+
+全是运行期存档 / 日志 / 缓存，**删掉会重置登录态**。所以：`--prune` 在装完并跑过游戏之后使用要谨慎。
+（`StreamingAssets/VFS/` 下的热更新产物已在 `6a4a2db` 排除出删除范围。）
+
+### 11.5 独立监视线（第三方观测）
+
+`watch_download.py` 每 30 s 采样一次，共 **64 个采样点（32 分钟）**，四点判据全过：
+
+| # | 判据 | 结果 |
+|---|---|---|
+| 1 | 进程存活 | 64/64 个点都活着 |
+| 2 | 已写字节单调性 | 单调不回退 |
+| 3 | 同时进行中的 `.part` 数量 | `{1: 64}` —— 任何时刻恰好一个 |
+| 4 | 换文件交接 | 交接 8 次，每次 `.part` 归零都**恰好 +1** 个完成文件 |
+
+- 30 min 时界面显示 21.0%（9/317 文件，8.55 GB / 42.47 GB）vs 实测 9 文件 / 8.45 GiB = 9.07 GB —— **一致**。
+- 该窗口 8.45 GiB / 31.8 min = **4.54 MiB/s**（含换文件间隙）。D 盘 73.49 → 65.26 GB。
+- **老 bug（提前报完成）未复现。**
+
+### 11.6 磁盘守恒
+
+D 盘起点 91.16 GB 可用 → 预期剩 33.20 GB，**实际 31.6 GB**，差 **−1.6 GB**。
+差额来自游戏运行期写入的日志/缓存与 NTFS 元数据，属于合理范围，**不是泄漏**。
 
 ---
 
@@ -418,7 +512,7 @@ EFD(EFDownloader)/
 │       ├── runner.py            子命令分发与异常→退出码
 │       └── exitcode.py          退出码常量
 ├── packaging/               PyInstaller 入口、spec、图标
-├── tests/                   437 个用例，标准库 unittest
+├── tests/                   438 个用例，标准库 unittest
 ├── data/
 │   ├── package_manifest.csv 1692 条清单（派生物）
 │   ├── hotfix_index_main.json / hotfix_index_initial.json

@@ -13,6 +13,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
+from . import journal
 from .archive import Archive
 from .planner import Plan
 from .util import UnsafePathError, safe_join
@@ -93,6 +94,14 @@ def install(
     last_written = 0
     emitted_written = emitted_done = -1
     speed = 0.0
+    # 这一轮真正算数的文件，装完记进安装日志——下次 `--prune` 才知道
+    # 哪些是「本工具的」，可以回收；没记过的一律不碰。
+    #
+    # 已经装好的那些也要记：它们的路径和尺寸跟清单分毫不差，``_looks_installed``
+    # 已经替我们认过一遍了。不记的话，日志启用之前装好的目录就永远是「外来文件」，
+    # ``--prune`` 再也回收不了旧版本残留——而那正是这个功能存在的意义。
+    placed: list[tuple[str, int]] = [(e.name, e.size) for e in plan.already]
+    removed: list[str] = []
 
     def emit(current: str, force: bool = False, partial: int = 0) -> None:
         """播报进度。
@@ -136,62 +145,69 @@ def install(
         except Exception:  # noqa: BLE001 - 回调出错不该毁掉安装
             pass
 
-    for entry in plan.need:
-        if stop_event is not None and stop_event.is_set():
-            result.stopped = True
-            break
+    try:
+        for entry in plan.need:
+            if stop_event is not None and stop_event.is_set():
+                result.stopped = True
+                break
 
-        dest = safe_join(target, entry.name)
-        parent = os.path.dirname(dest)
-        if parent:
-            os.makedirs(parent, exist_ok=True)
+            dest = safe_join(target, entry.name)
+            parent = os.path.dirname(dest)
+            if parent:
+                os.makedirs(parent, exist_ok=True)
 
-        tmp = dest + ".part"
-        file_bytes = 0
-        aborted = False
-        try:
-            with archive.open(entry) as src, open(tmp, "wb") as dst:
-                while True:
-                    # 每块都查一次停机。只在文件之间查的话，「停止」要等整个
-                    # 文件写完才生效，而最大的单文件有好几个 GB——用户按下去
-                    # 之后界面十几分钟没反应，只会认为程序卡死了。
-                    if stop_event is not None and stop_event.is_set():
-                        aborted = True
-                        break
-                    buf = src.read(COPY_CHUNK)
-                    if not buf:
-                        break
-                    dst.write(buf)
-                    file_bytes += len(buf)
-                    emit(entry.name, partial=file_bytes)
-            if aborted:
-                # 半截文件没有任何价值：下次仍然从头下。绝不 promote 成正式文件。
+            tmp = dest + ".part"
+            file_bytes = 0
+            aborted = False
+            try:
+                with archive.open(entry) as src, open(tmp, "wb") as dst:
+                    while True:
+                        # 每块都查一次停机。只在文件之间查的话，「停止」要等整个
+                        # 文件写完才生效，而最大的单文件有好几个 GB——用户按下去
+                        # 之后界面十几分钟没反应，只会认为程序卡死了。
+                        if stop_event is not None and stop_event.is_set():
+                            aborted = True
+                            break
+                        buf = src.read(COPY_CHUNK)
+                        if not buf:
+                            break
+                        dst.write(buf)
+                        file_bytes += len(buf)
+                        emit(entry.name, partial=file_bytes)
+                if aborted:
+                    # 半截文件没有任何价值：下次仍然从头下。绝不 promote 成正式文件。
+                    _quiet_remove(tmp)
+                else:
+                    # 到这里 zipfile 已在 EOF 处校验过 CRC32；再原子替换。
+                    os.replace(tmp, dest)
+                    placed.append((entry.name, file_bytes))
+            except Exception as exc:  # noqa: BLE001
                 _quiet_remove(tmp)
-            else:
-                # 到这里 zipfile 已在 EOF 处校验过 CRC32；再原子替换。
-                os.replace(tmp, dest)
-        except Exception as exc:  # noqa: BLE001
-            _quiet_remove(tmp)
-            message = f"{entry.name}: {exc}"
-            result.errors.append(message)
-            emit(f"失败 {entry.name}", force=True)
-            if not keep_going:
-                result.elapsed = time.monotonic() - started
-                result.net_bytes = archive.net_bytes
-                result.requests = archive.net_requests
-                return result
-            continue
+                message = f"{entry.name}: {exc}"
+                result.errors.append(message)
+                emit(f"失败 {entry.name}", force=True)
+                if not keep_going:
+                    result.elapsed = time.monotonic() - started
+                    result.net_bytes = archive.net_bytes
+                    result.requests = archive.net_requests
+                    return result
+                continue
 
-        if aborted:
-            result.stopped = True
-            break
+            if aborted:
+                result.stopped = True
+                break
 
-        result.written += file_bytes
-        result.done += 1
-        emit(entry.name)
+            result.written += file_bytes
+            result.done += 1
+            emit(entry.name)
 
-    if prune and plan.stale and not result.stopped:
-        result.pruned = _prune(target, plan.stale)
+        if prune and plan.stale and not result.stopped:
+            removed = _prune(target, plan.stale)
+            result.pruned = len(removed)
+    finally:
+        # 装完、中断、Ctrl-C——都得记。日志是 ``--prune`` 唯一的判据，
+        # 少记一条只是少回收一个文件；漏记的绝不会被当成垃圾删掉。
+        journal.update(target, added=placed, removed=removed)
 
     result.elapsed = time.monotonic() - started
     result.net_bytes = archive.net_bytes
@@ -227,13 +243,17 @@ def _sweep_parts(target: str, plan: Plan) -> None:
             pass
 
 
-def _prune(target: str, names: list[str]) -> int:
-    """删除清单里已不存在的本地文件。只删文件，不删目录。"""
-    removed = 0
+def _prune(target: str, names: list[str]) -> list[str]:
+    """删除清单里已不存在的本地文件。只删文件，不删目录。
+
+    返回**真的删掉了**的那些名字，好让调用方把记录一并更新掉——否则日志会
+    一直记着已经不存在的文件，下次 ``--prune`` 又要白跑一遍。
+    """
+    removed: list[str] = []
     for name in names:
         try:
             os.remove(safe_join(target, name))
-            removed += 1
+            removed.append(name)
         except (OSError, ValueError):
             pass
     return removed

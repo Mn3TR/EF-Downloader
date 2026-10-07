@@ -92,15 +92,17 @@ def build_parser() -> argparse.ArgumentParser:
     _add_scope_args(p_plan)
     p_plan.add_argument("--json", metavar="FILE", help="把完整计划写成 JSON")
     p_plan.add_argument("--stale", action="store_true",
-                        help="额外扫描目标目录，列出清单里没有的多余文件（慢；热更新子树除外）")
+                        help="额外扫描目标目录，列出清单里没有的多余文件"
+                             "（慢；热更新子树除外。删除只认安装日志记过的那些）")
     p_plan.add_argument("--quiet", action="store_true", help="只打印汇总")
 
     p_inst = sub.add_parser("install", help="执行安装（默认仍是 dry-run）")
     _add_scope_args(p_inst)
     p_inst.add_argument("--apply", action="store_true", help="真的写盘；不加则只预览")
     p_inst.add_argument("--prune", action="store_true",
-                        help="装完后删除本地多余文件（清单里已不存在的；"
-                             "跳过 StreamingAssets/VFS，那里是热更新的地盘）")
+                        help="装完后删除本地多余文件。只删「安装日志记着是本工具写的"
+                             "且尺寸没变过」的那些，所以游戏运行期写的存档/缓存 "
+                             "永远不会被删；跳过 StreamingAssets/VFS，那是热更新的地盘")
     p_inst.add_argument("--keep-going", action="store_true",
                         help="单个文件失败时继续，而不是中断")
 

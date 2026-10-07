@@ -10,7 +10,9 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
+from unittest import mock
 
+from efd.core import journal
 from efd.core.archive import load_pack_sizes, open_local
 from efd.core.config import VOLUME_SIZE
 from efd.core.installer import install
@@ -35,10 +37,31 @@ class InstallerCase(unittest.TestCase):
         self.target = tempfile.mkdtemp(prefix="efd_install_")
         self.addCleanup(self._rmtree, self.target)
 
+        # 安装日志是 ``--prune`` 的判据，装一次就会写。测试绝不能碰用户真实的
+        # ``%LOCALAPPDATA%\EFD\journal.json``——跟 test_settings 打桩 config_path 一个道理。
+        self.state = Path(tempfile.mkdtemp(prefix="efd_journal_"))
+        self.addCleanup(self._rmtree, str(self.state))
+        patcher = mock.patch.object(
+            journal, "state_path", lambda: self.state / journal.FILE_NAME
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
         # 只有本地头落在末卷内的条目才读得出来。
         self.readable = [
             e for e in self.archive.files() if e.offset >= 53 * VOLUME_SIZE
         ]
+
+    def write(self, rel: str, data: bytes) -> Path:
+        """在目标目录里造一个文件，返回它的路径。"""
+        path = Path(self.target) / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+        return path
+
+    def remember(self, **sizes: int) -> None:
+        """假装这些文件是本工具以前装的——``--prune`` 只认日志记过的。"""
+        journal.update(self.target, added=list(sizes.items()))
 
     @staticmethod
     def _rmtree(path: str) -> None:
@@ -314,9 +337,9 @@ class TestFailureHandling(InstallerCase):
 
 class TestPrune(InstallerCase):
     def test_prune_removes_stale_files(self):
-        stale = Path(self.target) / "leftover" / "old.chk"
-        stale.parent.mkdir(parents=True, exist_ok=True)
-        stale.write_bytes(b"stale")
+        """日志记过、尺寸没变、清单里又没了——这才是「陈旧」，可以回收。"""
+        stale = self.write("leftover/old.chk", b"stale")
+        self.remember(**{"leftover/old.chk": 5})
 
         plan = self.make_limited_plan(detect_stale=True)
         self.assertIn("leftover/old.chk", plan.stale)
@@ -326,9 +349,92 @@ class TestPrune(InstallerCase):
         self.assertEqual(result.pruned, 1)
         self.assertFalse(stale.exists())
 
+    def test_prune_spares_files_the_journal_never_saw(self):
+        """游戏运行期写的文件从没进过日志，所以永远不会被删。
+
+        这条就是当初那个 bug：`mmkv/`、`CrashSightLog/`、`Endfield_Data/Persistent/`
+        里的存档和缓存在清单里都没有，早先的判据会把它们当垃圾清掉。
+        """
+        runtime = self.write("mmkv/login_cache", b"runtime cache")
+        persistent = self.write("Endfield_Data/Persistent/index_main.json", b"{}")
+
+        plan = self.make_limited_plan(detect_stale=True)
+
+        self.assertEqual(plan.stale, [])
+        self.assertIn("mmkv/login_cache", plan.foreign)
+        self.assertIn("Endfield_Data/Persistent/index_main.json", plan.foreign)
+
+        result = install(self.archive, plan, prune=True)
+
+        self.assertEqual(result.pruned, 0)
+        self.assertTrue(runtime.exists())
+        self.assertTrue(persistent.exists())
+
+    def test_a_logged_file_of_a_different_size_is_left_alone(self):
+        """尺寸对不上就说明文件已经易主，不再归本工具处置。"""
+        changed = self.write("leftover/old.chk", b"someone else rewrote this")
+        self.remember(**{"leftover/old.chk": 5})  # 日志里记的是 5 字节
+
+        plan = self.make_limited_plan(detect_stale=True)
+
+        self.assertEqual(plan.stale, [])
+        self.assertIn("leftover/old.chk", plan.foreign)
+
+        result = install(self.archive, plan, prune=True)
+        self.assertEqual(result.pruned, 0)
+        self.assertTrue(changed.exists())
+
+    def test_install_records_what_it_wrote(self):
+        """装完必须把落盘的文件记进日志，否则下次 --prune 无从判断。"""
+        plan = self.make_limited_plan()
+        self.assertTrue(plan.need, "夹具里应当有可安装的条目")
+
+        install(self.archive, plan)
+
+        logged = journal.load(self.target)
+        for entry in plan.need:
+            self.assertEqual(logged.get(entry.name), entry.size)
+
+    def test_already_installed_files_are_recorded_too(self):
+        """早就装好的文件也要补记进日志。
+
+        真实场景：用户拿旧版本装完 57 GiB，才升级到带安装日志的这一版。
+        这些文件的路径和尺寸跟清单分毫不差，``_looks_installed`` 已经认过一遍;
+        不补记的话，它们永远是「外来文件」，``--prune`` 再也回收不了旧版本残留——
+        而那正是这个功能存在的意义。
+        """
+        # 先空跑一次记录基线，再"重装"一次：这一次全都已在盘上。
+        first = self.make_limited_plan()
+        install(self.archive, first)
+        self.assertTrue(first.need, "夹具里应当有可安装的条目")
+
+        second = self.make_limited_plan()
+        self.assertEqual(second.need, [])
+        self.assertEqual(len(second.already), len(first.need))
+
+        # 把日志清空，模拟"日志启用之前就装好了"的目录。
+        journal.update(self.target, removed=[e.name for e in first.need])
+        self.assertEqual(journal.load(self.target), {})
+
+        install(self.archive, second)
+
+        logged = journal.load(self.target)
+        for entry in second.already:
+            self.assertEqual(logged.get(entry.name), entry.size)
+
+    def test_prune_forgets_what_it_deleted(self):
+        """删掉的文件要从日志里划掉，否则下次还要白跑一遍。"""
+        self.write("leftover/old.chk", b"stale")
+        self.remember(**{"leftover/old.chk": 5})
+
+        plan = self.make_limited_plan(detect_stale=True)
+        install(self.archive, plan, prune=True)
+
+        self.assertNotIn("leftover/old.chk", journal.load(self.target))
+
     def test_no_prune_keeps_stale_files(self):
-        stale = Path(self.target) / "keepme.chk"
-        stale.write_bytes(b"stale")
+        stale = self.write("keepme.chk", b"stale")
+        self.remember(**{"keepme.chk": 5})
 
         plan = self.make_limited_plan(detect_stale=True)
         install(self.archive, plan, prune=False)
@@ -339,11 +445,11 @@ class TestPrune(InstallerCase):
         """通道 B 往 VFS 下加的文件不在通道 A 清单里，但它们不是陈旧文件。
 
         少了这条排除，``--prune`` 会把热更新下来的资源当垃圾删掉。
+        注意这里**故意也记进日志**——即便记过，VFS 子树也照样排除。
         """
-        hot = (Path(self.target) / "Endfield_Data" / "StreamingAssets"
-               / "VFS" / "AABBCCDD" / "EEFF0011.chk")
-        hot.parent.mkdir(parents=True, exist_ok=True)
-        hot.write_bytes(b"hot-updated resource")
+        hot = self.write("Endfield_Data/StreamingAssets/VFS/AABBCCDD/EEFF0011.chk",
+                         b"hot-updated resource")
+        self.remember(**{"Endfield_Data/StreamingAssets/VFS/AABBCCDD/EEFF0011.chk": 20})
 
         plan = self.make_limited_plan(detect_stale=True)
         self.assertEqual(plan.stale, [])
@@ -354,12 +460,12 @@ class TestPrune(InstallerCase):
 
     def test_prune_exclusion_stops_at_the_vfs_subtree(self):
         """排除只覆盖 VFS 子树：VFS 之外的陈旧文件照删不误。"""
-        hot = (Path(self.target) / "Endfield_Data" / "StreamingAssets"
-               / "VFS" / "keepme.chk")
-        hot.parent.mkdir(parents=True, exist_ok=True)
-        hot.write_bytes(b"keep")
-        junk = Path(self.target) / "Endfield_Data" / "leftover.chk"
-        junk.write_bytes(b"junk")
+        hot = self.write("Endfield_Data/StreamingAssets/VFS/keepme.chk", b"keep")
+        junk = self.write("Endfield_Data/leftover.chk", b"junk")
+        self.remember(**{
+            "Endfield_Data/StreamingAssets/VFS/keepme.chk": 4,
+            "Endfield_Data/leftover.chk": 4,
+        })
 
         plan = self.make_limited_plan(detect_stale=True)
         self.assertEqual(plan.stale, ["Endfield_Data/leftover.chk"])

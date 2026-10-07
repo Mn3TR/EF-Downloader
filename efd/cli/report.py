@@ -68,6 +68,9 @@ def print_plan(plan) -> None:
         print(f"  !! 路径不可信     = {len(plan.unsafe)} 个（已跳过，见 --json）")
     if plan.stale:
         print(f"本地多余(陈旧)      = {len(plan.stale)} 个")
+    if plan.foreign:
+        print(f"本地外来(保留)      = {len(plan.foreign)} 个"
+              f"   <- 安装日志里没有，一律不删")
 
     print("\n峰值磁盘估算：")
     print(f"  本方案  = 最终 {human(plan.final_bytes)} + 单文件缓冲 {human(plan.biggest)} "

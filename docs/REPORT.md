@@ -9,7 +9,7 @@
 
 ## 0. 一句话结论
 
-**官方启动器在本机装不下（峰值 110.86 GB > D 盘可用 91.2 GB）；本文实现的流式安装器只需要 59.35 GB 峰值，能装，装完还剩约 33 GB。**
+**官方启动器在本机装不下（峰值 110.97 GiB > D 盘可用 91.2 GB）；本文实现的流式安装器只需要 59.46 GiB 峰值，能装，装完还剩约 33 GB。**
 
 ---
 
@@ -23,8 +23,12 @@
 
 | 方案 | 峰值需求 | 结果 |
 |---|---|---|
-| 官方启动器 | 压缩包 53.01 + 解压 57.85 = **110.86 GB** | ❌ **差 19.7 GB** |
-| 本方案 | 最终 57.85 + 单文件缓冲 1.50 = **59.35 GB** | ✅ 余 ~31 GB |
+| 官方启动器 | 压缩包 53.01 + 解压 57.96 = **110.97 GiB** | ❌ **差 19.8 GiB** |
+| 本方案 | 最终 57.96 + 单文件缓冲 1.50 = **59.46 GiB** | ✅ 余 ~31 GB |
+| **节省** | **51.51 GiB** | 全部来自「压缩包从不落盘」 |
+
+> 第 0、1 章用的是**安装完成后复核**的数字（第 11 章实测口径，1024 进制 GiB）。
+> 写作当时按中央目录初算是 57.85 / 110.86 —— 差 0.11 GiB，因为初算漏了目录条目。
 
 ---
 
@@ -115,7 +119,7 @@ zlib.dll
 
 **推论（也是 `--prune` 的坑）**：路径稳定意味着「本地有哪些路径」= 通道 A 清单 ∪ 后来新增的。
 通道 B 热更新会往 `StreamingAssets/VFS` 下**新增**文件，这些新增路径当然不在通道 A 清单里 ——
-但它们不是陈旧文件。所以「不在清单里」**不能**单独作为删除依据，见
+但它们不是陈旧文件。所以「不在清单里」**不能**单独作为删除依据，见第 12 章与
 [`README.md` 已知限制](../README.md)。
 
 ---
@@ -331,6 +335,10 @@ python -m efd install --target "D:\Apps\Hypergryph Launcher\games\Arknights Endf
 
 ## 10. 建议的下一步
 
+> ⚠️ **本章也是历史记录**（写于第 7 章试点之后）。第 1、2 条均已完成：C 盘已清，
+> 启动器与游戏都已实测认账（第 11 章）。真正剩下的待办是通道 B 增量，见第 9 章风险 6 之外的
+> `README.md` 已知限制。
+
 1. **立刻清 C 盘**：删掉 `C:\Users\libai\AppData\Local\Hypergryph\33a0a6296a20400d503c59ac0fd6341e\tmp\downloader\download\42131218\ArknightsEndfield_Downloader_*.exe`（166 MB）
 2. **打开鹰角启动器**，看它面对一个"半装"目录的反应 → 这是验证风险 #2 的最便宜方式
 3. 根据结果决定是「继续补 StreamingAssets」还是「换策略」
@@ -403,8 +411,13 @@ mmkv/login_cache
 mmkv/login_cache.crc
 ```
 
-全是运行期存档 / 日志 / 缓存，**删掉会重置登录态**。所以：`--prune` 在装完并跑过游戏之后使用要谨慎。
-（`StreamingAssets/VFS/` 下的热更新产物已在 `6a4a2db` 排除出删除范围。）
+全是运行期存档 / 日志 / 缓存，**删掉会重置登录态**。当时的 `--prune` 会把它们全部列为陈旧。
+
+> ⚠️ **这里记的是当时的现象，该 bug 已修**：现在的 `--prune` 只删安装日志记过的文件，
+> 上面这 12 个一个都不会动。修复过程与更完整的实测数据见第 12 章。
+> 另外这个数字本身就说明问题 —— 安装后目录从 1613 涨到 1635、再到 1747 个文件，
+> 不在清单里的从 12 涨到 **146 个**，路径事先无法枚举。
+> （`StreamingAssets/VFS/` 下的热更新产物已在 `6a4a2db` 排除出删除范围。）
 
 ### 11.5 独立监视线（第三方观测）
 
@@ -425,6 +438,118 @@ mmkv/login_cache.crc
 
 D 盘起点 91.16 GB 可用 → 预期剩 33.20 GB，**实际 31.6 GB**，差 **−1.6 GB**。
 差额来自游戏运行期写入的日志/缓存与 NTFS 元数据，属于合理范围，**不是泄漏**。
+
+---
+
+## 12. `--prune` 误删运行期文件：修复记录
+
+第 11.4 节记录的 12 个运行期文件不是「一批特例」，而是一类会**持续增长**的现象。
+本章记录修它的过程 —— 其中两条判据被真实数据证伪，值得留着别再走一遍。
+
+### 12.1 问题的真实规模
+
+游戏每启动一次就往安装目录里写新文件。实测同一份安装，目录文件数变化：
+
+| 时点 | 磁盘文件数 | 不在清单里的 |
+|---|---|---|
+| 安装刚完成 | 1613 | 12 |
+| 又启动过几次 | 1635 | 34 |
+| 再启动过几次 | 1747 | **146** |
+
+清单（`data/package_manifest.csv`，1601 个 file 条目）本身**没有任何变化**，涨的全是
+游戏自己写的。146 个里包括整个 `Endfield_Data/Persistent/` 树（下载缓存、`Temp/`、
+`VFS/`、`index_main.json`、`pref_initial.json`）、`WebviewConfig/localBulletin`、
+`sdklogs/HGEventLog.log`、`eld_PlatformProcess.db` 等，**单个文件最大 1,473,737,190 B（≈1.37 GiB）**。
+
+**关键结论：路径事先无法枚举。** 游戏既往未声明的目录写（`Endfield_Data/Persistent/`、
+`sdklogs/`、`mmkv/`），也往清单确实声明过的目录写（`WebviewConfig/` 有 8 条清单条目，
+却仍多出 `localBulletin`、`popupVersion`），也往根目录写（`eld_Endfield.db`）。
+
+### 12.2 两条被证伪的判据（不要再试）
+
+**① 结构判据：「父目录没被清单声明」即运行期产物。**
+清单自带 91 个 `Kind=dir` 目录条目，实测它与「由 1601 个文件路径推出的父目录集合」
+**双向差集都是空**（`inferred - declared = []`、`declared - inferred = []`），
+不变量看起来完美成立（`file entries whose parent is NOT a declared dir = 0`）。
+
+但它**是错的**：`mmkv/`（游戏运行期建的）与 `leftover/`（旧版本删剩的）结构完全相同，
+都是未被声明的父目录，无从区分。跑全量测试立刻挨了一记：
+`FAIL: test_prune_removes_stale_files`，`AssertionError: 'leftover/old.chk' not found in []`
+—— 那不是「测试过时」，是**真实回归**：该判据让 `--prune` 静默放过真正该删的旧残留。
+即便只看覆盖率它也不够，结构判据对当时那 12 个文件只覆盖 9/12。
+
+**② 静态路径黑名单（`RUNTIME_PATHS`）。**
+回退成显式列出已知运行期路径（4 个目录前缀 + 3 个具体文件）。测试全绿，但拿到真实安装上
+一跑就露馅：清单保护 14 条、仍有 **20 条会被误删**，其中 16 条在 `Endfield_Data/Persistent/`。
+黑名单永远是「上一次观测的合影」，而这个集合每次都变。
+
+### 12.3 采用的方案：安装日志
+
+`efd/core/journal.py` —— EFD 记下**自己写过哪些文件、写完是什么尺寸**：
+
+```json
+{"targets": {"d:/apps/.../arknights endfield": {"Endfield.exe": 1234567, ...}}}
+```
+
+`--prune` 只删「日志里有 **且** 尺寸与当时一致」的文件，其余进「本地外来(保留)」桶只报告不删。
+
+三个设计取舍：
+
+1. **尺寸也记。** 光记名字的话，玩家手改过的文件（比如换了个 mod）会被删掉。
+2. **路径规范化**（`os.path.normcase(os.path.abspath(...))`）—— 大小写、正反斜杠、
+   尾分隔符的不同写法都算同一个目标；最多记 8 个目标，按最近使用淘汰。
+3. **`plan.already` 也要补记。** 老用户拿 v0.2.4 装完 57 GiB 才升级到这一版，
+   这些文件路径尺寸与清单分毫不差、已被 `_looks_installed` 认过一遍；不补记的话它们
+   永远是「外来文件」，`--prune` 再也回收不了旧版本残留 —— 而那正是功能存在的意义。
+
+配套改动：`Plan` 新增 `foreign` 字段（进 `--json` 与 `report.print_plan` 的
+「本地外来(保留)」行）；`_prune` 返回值从 `int` 改成真的删掉的名字列表（好把它从日志里划掉）；
+`cmd_install` 的早退条件从 `if not plan.need` 改成 `if not plan.need and not args.prune` ——
+否则装好的目录永远等不到第一次 `install`，日志永远建不起来。
+
+**已知代价（刻意接受）：** 日志启用前的老安装第一次跑 `--prune` **什么也不删**（先补记，
+下次才具备回收能力）；`StreamingAssets/VFS` 仍在删除范围外（见 12.4）。
+
+### 12.4 真实安装上的验证
+
+`D:\tmp\efd-probe\verify_journal.py`（只读，离线用清单 CSV）把真实安装喂给新判据：
+
+```
+清单文件条目 = 1601
+磁盘文件数   = 1747
+[首次启用，日志为空] 可删 = 0   只报告 = 146
+[日志已建立]         可删 = 0   只报告 = 146
+```
+
+**146 个运行期文件一个都不会删**，包括整个 `Endfield_Data/Persistent/` 树。
+第二个场景（日志已用真实安装的 `already` 引导过）仍是 0 —— 因为这 146 个从未被本工具写过。
+
+`StreamingAssets/VFS` 依然排除在外：通道 B 热更新会往那里新增文件（实测 115 个文件、
+7.23 GiB），它们不在通道 A 清单里。这条排除现在**同时**由日志判据兜底（日志不会记 VFS
+里的热更新文件），但显式排除保留 —— 双保险。代价仍是旧版本 VFS 残留（67 个文件、
+0.71 GiB）回收不了：**漏删 0.71 GiB，好过误删 7.23 GiB。**
+
+### 12.5 测试
+
+测试从 438 涨到 **470**（新增 `tests/test_journal.py` 25 个用例，`test_installer.TestPrune`
+改写并扩到 9 个，`test_commands` 增 2 个）。三条最关键的：
+
+- `test_prune_spares_files_the_journal_never_saw` —— 造 `mmkv/login_cache` +
+  `Endfield_Data/Persistent/index_main.json`，断言 `plan.stale == []`、两者都在
+  `plan.foreign`、`pruned == 0`。**这就是原始 bug 的回归测试。**
+- `test_prune_removes_stale_files` —— 守住另一头：日志记过的旧残留**必须**还能删。
+  （结构判据正是死在这条上。）
+- `test_already_installed_files_are_recorded_too` —— 装一遍 → 清空日志 → 再装一遍全 already
+  → 断言补记成功。**它抓出一个真 bug**：主循环里重复声明 `placed` 把播种的 `already` 清空了。
+
+`test_journal.py` 的 `JournalCase` 把 `journal.state_path` 打桩到临时目录，
+`test_installer.InstallerCase.setUp` 同理 —— 17 处真实 `install()` 调用绝不会碰用户真实的
+`%LOCALAPPDATA%\EFD\journal.json`。
+
+> 两个自己写的测试用例最初是错的，值得记一笔：① 把文件名 `"7"` 当数字过滤掉 —— JSON 的键
+> 一定是字符串，`"7"` 是**合法文件名**（真有个文件叫 `7`），丢掉它才是 bug；
+> ② 「状态文件位置」那条拿打桩后的 `state_path()` 跟 `state_dir()` 比，是在自问自答。
+> 装置里得先存一份**没被打桩的**真函数。
 
 ---
 
@@ -489,6 +614,7 @@ EFD(EFDownloader)/
 │   │   ├── util.py              格式化 / CRC32 / safe_join / 输出编码
 │   │   ├── detect.py            从注册表定位游戏目录
 │   │   ├── settings.py          记住上次用过的安装目录与网络选项
+│   │   ├── journal.py           安装日志：记下本工具写过哪些文件（--prune 的唯一判据）
 │   │   ├── seed.py              Seed 接口客户端
 │   │   ├── throttle.py          限速（虚拟时间槽令牌桶）
 │   │   ├── archive.py           ZIP 归档视图
@@ -512,7 +638,7 @@ EFD(EFDownloader)/
 │       ├── runner.py            子命令分发与异常→退出码
 │       └── exitcode.py          退出码常量
 ├── packaging/               PyInstaller 入口、spec、图标
-├── tests/                   438 个用例，标准库 unittest
+├── tests/                   470 个用例，标准库 unittest
 ├── data/
 │   ├── package_manifest.csv 1692 条清单（派生物）
 │   ├── hotfix_index_main.json / hotfix_index_initial.json

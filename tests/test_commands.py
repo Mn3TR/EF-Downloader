@@ -310,6 +310,24 @@ class TestCmdInstall(QuietStdout):
             out = run(commands.cmd_install, install_args(apply=True))
         self.assertNotIn("--apply", out)
 
+    def test_prune_runs_even_when_there_is_nothing_to_install(self):
+        """``--prune`` 的典型用法恰恰是「版本没变，只想清掉旧残留」。
+
+        早退的话，装好的目录永远等不到第一次 ``install``，安装日志也就永远
+        建不起来——``--prune`` 会一直是个空操作。
+        """
+        with Patched(plan=plan_for(need=[])) as p:
+            out = run(commands.cmd_install, install_args(apply=True, prune=True))
+            self.assertEqual(p.install.call_count, 1)
+        self.assertNotIn("没有需要安装的文件", out)
+
+    def test_prune_still_previews_as_a_dry_run(self):
+        """没有 ``--apply`` 就绝不写盘——``--prune`` 也不例外。"""
+        with Patched(plan=plan_for(need=[])) as p:
+            out = run(commands.cmd_install, install_args(prune=True))
+            p.install.assert_not_called()
+        self.assertIn("[dry-run]", out)
+
     def test_summary_reports_files_bytes_and_requests(self):
         result = Result(done=2, written=4096, net_bytes=2048, requests=17, elapsed=5.0)
         with Patched(result=result):

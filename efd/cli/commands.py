@@ -69,7 +69,7 @@ def cmd_install(args) -> int:
         print("\n===== 计划 =====")
         print_plan(plan)
 
-        if not plan.need:
+        if not plan.need and not args.prune:
             print("\n没有需要安装的文件。")
             return EXIT_OK
 

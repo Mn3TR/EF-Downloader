@@ -32,11 +32,20 @@ DEFAULT_RATE = "0"
 DEFAULT_JOBS_TEXT = str(DEFAULT_JOBS)
 
 
-def config_path() -> Path:
-    """偏好设置文件位置。Windows 下放 ``%LOCALAPPDATA%\\EFD``。"""
+def state_dir() -> Path:
+    """本工具的私有状态目录。Windows 下是 ``%LOCALAPPDATA%\\EFD``。
+
+    偏好设置和安装日志都放这里——**绝不往游戏目录里塞状态文件**，
+    否则它就成了一份需要被 ``--prune`` 判断真伪的「多余文件」。
+    """
     base = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA")
     root = Path(base) if base else Path.home() / ".config"
-    return root / "EFD" / FILE_NAME
+    return root / "EFD"
+
+
+def config_path() -> Path:
+    """偏好设置文件位置。Windows 下放 ``%LOCALAPPDATA%\\EFD``。"""
+    return state_dir() / FILE_NAME
 
 
 def _text(value: object, fallback: str = "") -> str:
@@ -137,4 +146,5 @@ __all__ = [
     "remembered_net",
     "remembered_target",
     "save",
+    "state_dir",
 ]

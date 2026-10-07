@@ -3,6 +3,9 @@
 **resume / 续传逻辑只在这里实现一次**，CLI 与 GUI 共用。
 判定标准是「存在且尺寸相同就跳过」——不产生任何网络请求，所以续传是零成本的。
 只有显式 ``verify_crc`` 时才会读盘校验内容。
+
+本模块**只读**：``make_plan`` 不创建目录、不写文件，连安装日志也只读不写。
+真正动盘的是 ``installer``。
 """
 
 from __future__ import annotations
@@ -10,6 +13,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 
+from . import journal
 from .archive import Archive, Entry
 from .config import HOT_UPDATE_PATHS
 from .util import UnsafePathError, crc32_file, safe_join
@@ -28,6 +32,7 @@ class Plan:
     need: list[Entry] = field(default_factory=list)
     excluded: list[Entry] = field(default_factory=list)
     stale: list[str] = field(default_factory=list)
+    foreign: list[str] = field(default_factory=list)
     unsafe: list[str] = field(default_factory=list)
     verified: bool = False
 
@@ -96,6 +101,7 @@ class Plan:
             "peak_official": self.peak_official,
             "saving": self.saving,
             "stale": self.stale,
+            "foreign": self.foreign,
             "unsafe": self.unsafe,
             # 全量列出，不截断——截断过的「计划」会骗人。
             "need": [e.to_dict() for e in self.need],
@@ -118,6 +124,43 @@ def scan_local(root: str) -> dict[str, int]:
 
 def _excluded(name: str, prefixes) -> bool:
     return any(name.startswith(p) for p in prefixes)
+
+
+def _split_leftovers(
+    target: str, manifest: set[str], logged: dict[str, int]
+) -> tuple[list[str], list[str]]:
+    """把「本地有、清单没有」的文件分成 ``(可以删的, 只能报告的)``。
+
+    分界线是**安装日志**：``logged`` 是 ``journal.load(target)``，记着本工具
+    当初确实往这个目录写过哪些文件、各写了多少字节。
+
+    判据是「日志记过 **且尺寸分毫不差**」才算残留——文件被谁改过就说明它已经
+    易主，不再归本工具处置。这换来了三个想要的性质：
+
+    * 游戏运行期写的存档 / 日志 / 缓存（从没被记过）**永远不会被删**；
+    * 旧版本删剩的残留（当初是本工具写的）照常回收；
+    * 整目录被删掉的旧版本残留，即使目录结构已经和运行期产物长得一样，
+      也能靠「名字在日志里」认出来——这正是两条结构判据栽跟头的地方。
+
+    没用日志记过的一律进第二个桶：只报告，不删。所以**日志启用前就装好的
+    老目录，第一次跑不会删任何东西**，先跑一次 ``install`` 建立记录即可。
+
+    两个桶都排除 ``HOT_UPDATE_PATHS``：通道 B 的地盘不归 ``--prune`` 管。
+    """
+    stale: list[str] = []
+    foreign: list[str] = []
+    for name, size in scan_local(target).items():
+        if size <= 0 or name in manifest:
+            continue
+        # 通道 B 会往这些子树里新增文件，它们不在这份清单里，但**不是多余**。
+        # 少了这一条，`--prune` 会把热更新下来的资源当垃圾删掉。
+        if _excluded(name, HOT_UPDATE_PATHS):
+            continue
+        if logged.get(name) == size:
+            stale.append(name)
+        else:
+            foreign.append(name)
+    return sorted(stale), sorted(foreign)
 
 
 def make_plan(
@@ -158,16 +201,10 @@ def make_plan(
         need = need[:limit]
 
     stale: list[str] = []
+    foreign: list[str] = []
     if detect_stale:
         manifest = {e.name for e in files}
-        stale = sorted(
-            name for name, size in scan_local(target).items()
-            if size > 0
-            and name not in manifest
-            # 通道 B 会往这些子树里新增文件，它们不在这份清单里，但**不是多余**。
-            # 少了这一条，`--prune` 会把热更新下来的资源当垃圾删掉。
-            and not _excluded(name, HOT_UPDATE_PATHS)
-        )
+        stale, foreign = _split_leftovers(target, manifest, journal.load(target))
 
     return Plan(
         version=archive.version,
@@ -179,6 +216,7 @@ def make_plan(
         need=need,
         excluded=excluded,
         stale=stale,
+        foreign=foreign,
         unsafe=unsafe,
         verified=verify_crc,
     )
